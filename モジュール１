@@ -1,0 +1,220 @@
+Option Explicit
+
+' ブック全体で使う名前と値をここにまとめる
+
+Public Const APP_TITLE As String = "VBA ToDoリスト"
+
+' シート名
+Public Const SHEET_TODO_ADD As String = "ToDo追加"
+Public Const SHEET_TODO_LIST As String = "ToDoリスト"
+Public Const SHEET_COMPLETED As String = "完了済み"
+Public Const SHEET_DAILY As String = "毎日行う業務"
+Public Const SHEET_RECURRING As String = "定期業務"
+Public Const SHEET_HOLIDAY As String = "休業日"
+Public Const SHEET_SETTINGS As String = "設定"
+Public Const SHEET_SYSTEM As String = "システム管理"
+Public Const SHEET_BACKUP As String = "一時バックアップ"
+
+' 共通の行番号
+Public Const TITLE_ROW As Long = 1
+Public Const HEADER_ROW As Long = 2
+Public Const DATA_FIRST_ROW As Long = 3
+Public Const TODO_ADD_INPUT_ROW As Long = 3
+
+' ToDo追加の列
+Public Const COL_ADD_TODO_DUE As Long = 2
+Public Const COL_ADD_ACTUAL_DUE As Long = 3
+Public Const COL_ADD_NO As Long = 4
+Public Const COL_ADD_DESCRIPTION As Long = 5
+Public Const COL_ADD_PRIORITY As Long = 6
+
+' ToDoリストと完了済みの列
+Public Const COL_TODO_DUE As Long = 2
+Public Const COL_TODO_ACTUAL_DUE As Long = 3
+Public Const COL_TODO_NO As Long = 4
+Public Const COL_TODO_DESCRIPTION As Long = 5
+Public Const COL_TODO_CHECK As Long = 6
+Public Const COL_TODO_PRIORITY As Long = 7
+Public Const COL_TODO_TASK_TYPE As Long = 8
+Public Const COL_TODO_TASK_ID As Long = 9
+Public Const COL_TODO_ORIGINAL_DATE As Long = 10
+Public Const COL_TODO_CREATED_AT As Long = 11
+Public Const COL_TODO_COMPLETED_AT As Long = 12
+Public Const COL_TODO_SOURCE_ROW As Long = 13
+Public Const COL_TODO_PROCESS_STATUS As Long = 14
+Public Const COL_TODO_PREVIOUS_KEY As Long = 15
+Public Const COL_TODO_FIRST As Long = COL_TODO_DUE
+Public Const COL_TODO_LAST As Long = COL_TODO_PREVIOUS_KEY
+
+' 毎日行う業務の列
+Public Const COL_DAILY_ENABLED As Long = 2
+Public Const COL_DAILY_ID As Long = 3
+Public Const COL_DAILY_EXECUTION_TYPE As Long = 4
+Public Const COL_DAILY_NO As Long = 5
+Public Const COL_DAILY_DESCRIPTION As Long = 6
+Public Const COL_DAILY_PRIORITY As Long = 7
+Public Const COL_DAILY_UPDATE_STATUS As Long = 8
+
+' 定期業務の列
+Public Const COL_RECURRING_ENABLED As Long = 2
+Public Const COL_RECURRING_ID As Long = 3
+Public Const COL_RECURRING_TYPE As Long = 4
+Public Const COL_RECURRING_WEEKDAY As Long = 5
+Public Const COL_RECURRING_WEEK_NUMBER As Long = 6
+Public Const COL_RECURRING_DAY As Long = 7
+Public Const COL_RECURRING_HOLIDAY_ADJUSTMENT As Long = 8
+Public Const COL_RECURRING_FIRST_DATE As Long = 9
+Public Const COL_RECURRING_NO As Long = 10
+Public Const COL_RECURRING_DESCRIPTION As Long = 11
+Public Const COL_RECURRING_PRIORITY As Long = 12
+
+' 休業日の列
+Public Const COL_HOLIDAY_DATE As Long = 2
+Public Const COL_HOLIDAY_NOTE As Long = 3
+
+' 設定シートの列
+Public Const COL_SETTING_NAME As Long = 2
+Public Const COL_SETTING_VALUE As Long = 3
+
+' システム管理シートの列
+Public Const COL_SYSTEM_KEY As Long = 2
+Public Const COL_SYSTEM_VALUE As Long = 3
+
+' 一時バックアップシートの列
+Public Const COL_BACKUP_PROCESS_TYPE As Long = 2
+Public Const COL_BACKUP_SOURCE_SHEET As Long = 3
+Public Const COL_BACKUP_SOURCE_ROW As Long = 4
+Public Const COL_BACKUP_STARTED_AT As Long = 5
+Public Const COL_BACKUP_DATA_FIRST As Long = 6
+
+' 表示形式
+Public Const DATE_DISPLAY_FORMAT As String = "mm/dd"
+Public Const DATE_TIME_DISPLAY_FORMAT As String = "yyyy/mm/dd hh:mm:ss"
+Public Const NO_DISPLAY_FORMAT As String = "@"
+
+' 件数の初期値と絶対上限
+Public Const DEFAULT_COMPLETED_RETENTION_DAYS As Long = 30
+Public Const DEFAULT_TODO_MAX As Long = 200
+Public Const DEFAULT_DAILY_MAX As Long = 100
+Public Const DEFAULT_RECURRING_MAX As Long = 100
+Public Const ABSOLUTE_TODO_MAX As Long = 200
+Public Const ABSOLUTE_DAILY_MAX As Long = 100
+Public Const ABSOLUTE_RECURRING_MAX As Long = 100
+
+' 日付プルダウンは今日から翌月同日までにする
+Public Const DEFAULT_DATE_DROPDOWN_MONTHS As Long = 1
+
+' 設定項目名
+Public Const SETTING_COMPLETED_RETENTION_DAYS As String = "完了データ削除日数"
+Public Const SETTING_TODO_MAX As String = "ToDo最大件数"
+Public Const SETTING_DAILY_MAX As String = "毎日業務最大件数"
+Public Const SETTING_RECURRING_MAX As String = "定期業務最大件数"
+Public Const SETTING_DATE_DROPDOWN_MONTHS As String = "日付プルダウン月数"
+Public Const SETTING_SATURDAY_IS_HOLIDAY As String = "土曜日を休日扱い"
+Public Const SETTING_SUNDAY_IS_HOLIDAY As String = "日曜日を休日扱い"
+Public Const SETTING_SHOW_REGISTERED_MESSAGE As String = "登録完了メッセージ"
+Public Const SETTING_COLOR_SCHEME As String = "配色"
+
+' 設定の初期値
+Public Const DEFAULT_SATURDAY_IS_HOLIDAY As Boolean = True
+Public Const DEFAULT_SUNDAY_IS_HOLIDAY As Boolean = True
+Public Const DEFAULT_SHOW_REGISTERED_MESSAGE As Boolean = True
+Public Const DEFAULT_COLOR_SCHEME As String = "濃紺・青緑"
+
+' 業務区分
+Public Const TASK_TYPE_MANUAL As String = "単発"
+Public Const TASK_TYPE_DAILY As String = "毎日"
+Public Const TASK_TYPE_RECURRING As String = "定期"
+
+' 毎日業務の実行区分
+Public Const DAILY_TYPE_EVERY_DAY As String = "毎日"
+Public Const DAILY_TYPE_BUSINESS_DAY As String = "営業日のみ"
+
+' 定期業務の繰り返し種別
+Public Const RECURRING_TYPE_WEEKLY As String = "毎週指定曜日"
+Public Const RECURRING_TYPE_MONTHLY_DAY As String = "毎月指定日"
+Public Const RECURRING_TYPE_NTH_WEEKDAY As String = "毎月第N曜日"
+Public Const RECURRING_TYPE_LAST_WEEKDAY As String = "毎月最終指定曜日"
+Public Const RECURRING_TYPE_MONTH_END As String = "月末日"
+Public Const RECURRING_TYPE_LAST_BUSINESS_DAY As String = "月末最終営業日"
+
+' 休日調整
+Public Const HOLIDAY_ADJUST_PREVIOUS As String = "前営業日"
+Public Const HOLIDAY_ADJUST_NEXT As String = "翌営業日"
+Public Const HOLIDAY_ADJUST_NONE As String = "調整なし"
+
+' 優先度
+Public Const PRIORITY_HIGH As String = "高"
+Public Const PRIORITY_MEDIUM As String = "中"
+Public Const PRIORITY_LOW As String = "低"
+Public Const PRIORITY_SORT_HIGH As Long = 1
+Public Const PRIORITY_SORT_MEDIUM As Long = 2
+Public Const PRIORITY_SORT_LOW As Long = 3
+Public Const PRIORITY_SORT_BLANK As Long = 4
+Public Const PRIORITY_SORT_INVALID As Long = 5
+
+' 処理状態
+Public Const PROCESS_STATUS_CONFIRMED As String = "確認済み"
+Public Const PROCESS_STATUS_UNCONFIRMED As String = "未確認"
+Public Const UPDATE_STATUS_APPLIED As String = "反映済み"
+Public Const UPDATE_STATUS_PENDING As String = "未反映"
+
+' ID
+Public Const DAILY_ID_PREFIX As String = "D"
+Public Const RECURRING_ID_PREFIX As String = "R"
+Public Const ID_NUMBER_DIGITS As Long = 6
+Public Const ID_NUMBER_MAX As Long = 999999
+Public Const SYSTEM_KEY_NEXT_DAILY_ID As String = "次回毎日業務ID"
+Public Const SYSTEM_KEY_NEXT_RECURRING_ID As String = "次回定期業務ID"
+
+' チェックボックス名
+Public Const CHECKBOX_TODO_PREFIX As String = "chkTodo_"
+Public Const CHECKBOX_COMPLETED_PREFIX As String = "chkCompleted_"
+Public Const CHECKBOX_DAILY_PREFIX As String = "chkDailyUse_"
+Public Const CHECKBOX_RECURRING_PREFIX As String = "chkRecurringUse_"
+
+' ボタン名
+Public Const BUTTON_ADD_TODO As String = "btnAddTodo"
+Public Const BUTTON_VALIDATE_SORT As String = "btnValidateAndSort"
+Public Const BUTTON_REGISTER_DAILY_TODAY As String = "btnRegisterDailyToday"
+Public Const BUTTON_REBUILD_CHECKBOXES As String = "btnRebuildCheckboxes"
+Public Const BUTTON_RESTORE_COMPLETED As String = "btnRestoreCompleted"
+Public Const BUTTON_DELETE_EXPIRED As String = "btnDeleteExpired"
+Public Const BUTTON_ASSIGN_DAILY_IDS As String = "btnAssignDailyIds"
+Public Const BUTTON_ASSIGN_RECURRING_IDS As String = "btnAssignRecurringIds"
+Public Const BUTTON_APPLY_RECURRING As String = "btnApplyRecurring"
+Public Const BUTTON_DELETE_RECURRING As String = "btnDeleteRecurring"
+Public Const BUTTON_REFRESH_SETUP As String = "btnRefreshSetup"
+Public Const BUTTON_CHECK_INTEGRITY As String = "btnCheckIntegrity"
+
+' 参考UIに合わせた色
+Public Const COLOR_TITLE_NAVY As Long = &H4D3217
+Public Const COLOR_HEADER_TEAL As Long = &H7F7D16
+Public Const COLOR_SHEET_BACKGROUND As Long = &HFAF8F5
+Public Const COLOR_INPUT_BACKGROUND As Long = &HDCF4FF
+Public Const COLOR_HELPER_BACKGROUND As Long = &HF8F2EA
+Public Const COLOR_BORDER As Long = &HE5E0D7
+Public Const COLOR_INPUT_BORDER As Long = &H60B8F4
+Public Const COLOR_WHITE As Long = &HFFFFFF
+Public Const COLOR_TEXT_NAVY As Long = &H4D3217
+Public Const COLOR_TODAY_TEXT As Long = &H135A8A
+Public Const COLOR_ERROR_BACKGROUND As Long = &HEEEBFF
+Public Const COLOR_ERROR_TEXT As Long = &H6009C
+
+' よく使うメッセージ
+Public Const MSG_SETUP_REQUIRED As String = _
+    "必要なシートがありません。先に初期設定を実行してください。"
+
+Public Const MSG_TODO_LIMIT_REACHED As String = _
+    "ToDoリストが最大件数に達しているため、追加できません。"
+
+Public Const MSG_INVALID_SETTING_PREFIX As String = _
+    "設定値が不正なため、初期値を使用します。"
+
+' Excelの状態を確実に元へ戻すために使う
+Public Type TExcelState
+    ScreenUpdating As Boolean
+    EnableEvents As Boolean
+    Calculation As XlCalculation
+    DisplayAlerts As Boolean
+End Type
