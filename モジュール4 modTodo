@@ -1,0 +1,890 @@
+Option Explicit
+
+Public Sub AddManualTodo()
+    Dim savedState As TExcelState
+    Dim inputSheet As Worksheet
+    Dim todoSheet As Worksheet
+    Dim todoDue As Date
+    Dim actualDue As Date
+    Dim noText As String
+    Dim descriptionText As String
+    Dim priorityText As String
+    Dim targetRow As Long
+    Dim rowWriteStarted As Boolean
+    Dim sortStarted As Boolean
+    Dim errorText As String
+
+    On Error GoTo ErrorHandler
+
+    CaptureExcelState savedState
+
+    With Application
+        .ScreenUpdating = False
+        .EnableEvents = False
+        .Calculation = xlCalculationManual
+    End With
+
+    If Not WorksheetExists(SHEET_TODO_ADD) _
+        Or Not WorksheetExists(SHEET_TODO_LIST) Then
+
+        MsgBox MSG_SETUP_REQUIRED, vbExclamation, APP_TITLE
+        GoTo ExitHandler
+    End If
+
+    Set inputSheet = ThisWorkbook.Worksheets(SHEET_TODO_ADD)
+    Set todoSheet = ThisWorkbook.Worksheets(SHEET_TODO_LIST)
+
+    If Not IsValidExcelDate(inputSheet.Cells( _
+        TODO_ADD_INPUT_ROW, COL_ADD_TODO_DUE).Value) Then
+
+        MarkInputError inputSheet.Cells( _
+            TODO_ADD_INPUT_ROW, COL_ADD_TODO_DUE)
+
+        MsgBox "ToDo納期を選択してください。", _
+            vbExclamation, APP_TITLE
+
+        GoTo ExitHandler
+    End If
+
+    todoDue = DateOnlyValue(inputSheet.Cells( _
+        TODO_ADD_INPUT_ROW, COL_ADD_TODO_DUE).Value)
+
+    If Len(Trim$(CStr(GetSafeCellValue(inputSheet.Cells( _
+        TODO_ADD_INPUT_ROW, COL_ADD_ACTUAL_DUE))))) = 0 Then
+
+        actualDue = todoDue
+        inputSheet.Cells( _
+            TODO_ADD_INPUT_ROW, COL_ADD_ACTUAL_DUE).Value = actualDue
+
+    ElseIf IsValidExcelDate(inputSheet.Cells( _
+        TODO_ADD_INPUT_ROW, COL_ADD_ACTUAL_DUE).Value) Then
+
+        actualDue = DateOnlyValue(inputSheet.Cells( _
+            TODO_ADD_INPUT_ROW, COL_ADD_ACTUAL_DUE).Value)
+
+    Else
+        MarkInputError inputSheet.Cells( _
+            TODO_ADD_INPUT_ROW, COL_ADD_ACTUAL_DUE)
+
+        MsgBox "実納期を正しい日付で入力してください。", _
+            vbExclamation, APP_TITLE
+
+        GoTo ExitHandler
+    End If
+
+    If actualDue < todoDue Then
+        MarkInputError inputSheet.Cells( _
+            TODO_ADD_INPUT_ROW, COL_ADD_ACTUAL_DUE)
+
+        MsgBox "実納期はToDo納期以降の日付にしてください。", _
+            vbExclamation, APP_TITLE
+
+        GoTo ExitHandler
+    End If
+
+    noText = CStr(GetSafeCellValue(inputSheet.Cells( _
+        TODO_ADD_INPUT_ROW, COL_ADD_NO)))
+
+    descriptionText = Trim$(CStr(GetSafeCellValue(inputSheet.Cells( _
+        TODO_ADD_INPUT_ROW, COL_ADD_DESCRIPTION))))
+
+    If Len(descriptionText) = 0 Then
+        MarkInputError inputSheet.Cells( _
+            TODO_ADD_INPUT_ROW, COL_ADD_DESCRIPTION)
+
+        MsgBox "行うことを入力してください。", _
+            vbExclamation, APP_TITLE
+
+        GoTo ExitHandler
+    End If
+
+    priorityText = Trim$(CStr(GetSafeCellValue(inputSheet.Cells( _
+        TODO_ADD_INPUT_ROW, COL_ADD_PRIORITY))))
+
+    If Not IsAllowedPriority(priorityText) Then
+        MarkInputError inputSheet.Cells( _
+            TODO_ADD_INPUT_ROW, COL_ADD_PRIORITY)
+
+        MsgBox "優先度は「高」「中」「低」または空欄にしてください。", _
+            vbExclamation, APP_TITLE
+
+        GoTo ExitHandler
+    End If
+
+    If Not CanAddTodoRows(1, True) Then
+        GoTo ExitHandler
+    End If
+
+    ResetManualInputColors inputSheet
+
+    targetRow = GetNextDataRow(todoSheet)
+    rowWriteStarted = True
+
+    With todoSheet
+        .Cells(targetRow, COL_TODO_DUE).Value = todoDue
+        .Cells(targetRow, COL_TODO_ACTUAL_DUE).Value = actualDue
+
+        .Cells(targetRow, COL_TODO_NO).NumberFormat = _
+            NO_DISPLAY_FORMAT
+
+        .Cells(targetRow, COL_TODO_NO).Value = noText
+        .Cells(targetRow, COL_TODO_DESCRIPTION).Value = _
+            descriptionText
+
+        .Cells(targetRow, COL_TODO_CHECK).ClearContents
+        .Cells(targetRow, COL_TODO_PRIORITY).Value = priorityText
+        .Cells(targetRow, COL_TODO_TASK_TYPE).Value = _
+            TASK_TYPE_MANUAL
+
+        .Cells(targetRow, COL_TODO_TASK_ID).ClearContents
+        .Cells(targetRow, COL_TODO_ORIGINAL_DATE).Value = todoDue
+        .Cells(targetRow, COL_TODO_CREATED_AT).Value = Now
+        .Cells(targetRow, COL_TODO_COMPLETED_AT).ClearContents
+
+        .Cells(targetRow, COL_TODO_SOURCE_ROW).Value = _
+            TODO_ADD_INPUT_ROW
+
+        .Cells(targetRow, COL_TODO_PROCESS_STATUS).Value = _
+            PROCESS_STATUS_CONFIRMED
+
+        .Cells(targetRow, COL_TODO_PREVIOUS_KEY).Value = _
+            BuildTodoDataKey(todoSheet, targetRow)
+    End With
+
+    sortStarted = True
+
+    SortTodoListCore
+    RefreshTodoDisplayCore
+    ResetManualInputValues inputSheet
+
+    If GetSettingBoolean( _
+        SETTING_SHOW_REGISTERED_MESSAGE, _
+        DEFAULT_SHOW_REGISTERED_MESSAGE) Then
+
+        MsgBox "ToDoを追加しました。", _
+            vbInformation, APP_TITLE
+    End If
+
+ExitHandler:
+    RestoreExcelState savedState
+    Exit Sub
+
+ErrorHandler:
+    errorText = Err.Description
+
+    On Error Resume Next
+
+    If rowWriteStarted And Not sortStarted _
+        And targetRow >= DATA_FIRST_ROW Then
+
+        todoSheet.Range( _
+            todoSheet.Cells(targetRow, COL_TODO_FIRST), _
+            todoSheet.Cells(targetRow, COL_TODO_LAST)).ClearContents
+    End If
+
+    On Error GoTo 0
+
+    ShowProcessError _
+        "単発ToDoの追加", _
+        SHEET_TODO_ADD, _
+        TODO_ADD_INPUT_ROW, _
+        vbNullString, _
+        errorText
+
+    Resume ExitHandler
+End Sub
+
+Public Sub ValidateAndSortTodoChanges()
+    Dim savedState As TExcelState
+    Dim todoSheet As Worksheet
+    Dim lastRow As Long
+    Dim rowNumber As Long
+    Dim rowError As String
+    Dim errorList As String
+    Dim errorCount As Long
+    Dim pendingCount As Long
+    Dim todoLimit As Long
+
+    On Error GoTo ErrorHandler
+
+    CaptureExcelState savedState
+
+    With Application
+        .ScreenUpdating = False
+        .EnableEvents = False
+        .Calculation = xlCalculationManual
+    End With
+
+    If Not WorksheetExists(SHEET_TODO_LIST) Then
+        MsgBox MSG_SETUP_REQUIRED, vbExclamation, APP_TITLE
+        GoTo ExitHandler
+    End If
+
+    Set todoSheet = ThisWorkbook.Worksheets(SHEET_TODO_LIST)
+    lastRow = GetLastDataRow(todoSheet)
+
+    If lastRow < DATA_FIRST_ROW Then
+        MsgBox "確認するToDoはありません。", _
+            vbInformation, APP_TITLE
+
+        GoTo ExitHandler
+    End If
+
+    todoLimit = GetSettingLong( _
+        SETTING_TODO_MAX, _
+        DEFAULT_TODO_MAX, _
+        1, _
+        ABSOLUTE_TODO_MAX)
+
+    If GetTodoDataCount() > todoLimit Then
+        MsgBox "ToDoリストが設定された最大件数を超えています。", _
+            vbExclamation, APP_TITLE
+
+        GoTo ExitHandler
+    End If
+
+    For rowNumber = DATA_FIRST_ROW To lastRow
+        If TodoRowHasData(todoSheet, rowNumber) Then
+            If IsTodoRowPendingValidation( _
+                todoSheet, rowNumber) Then
+
+                pendingCount = pendingCount + 1
+            End If
+        End If
+    Next rowNumber
+
+    If pendingCount = 0 Then
+        MsgBox "確認が必要な変更はありません。", _
+            vbInformation, APP_TITLE
+
+        GoTo ExitHandler
+    End If
+
+    ClearTodoErrorColors todoSheet
+
+    For rowNumber = DATA_FIRST_ROW To lastRow
+        If TodoRowHasData(todoSheet, rowNumber) Then
+            If IsTodoRowPendingValidation( _
+                todoSheet, rowNumber) Then
+
+                rowError = vbNullString
+
+                If Not ValidateTodoRow( _
+                    todoSheet, rowNumber, rowError) Then
+
+                    errorCount = errorCount + 1
+                    MarkTodoRowError todoSheet, rowNumber
+
+                    If errorCount <= 30 Then
+                        errorList = errorList & _
+                            CStr(rowNumber) & "行：" & _
+                            rowError & vbCrLf
+                    End If
+                End If
+            End If
+        End If
+    Next rowNumber
+
+    If errorCount > 0 Then
+        If errorCount > 30 Then
+            errorList = errorList & _
+                "ほか " & CStr(errorCount - 30) & _
+                "件のエラーがあります。" & vbCrLf
+        End If
+
+        MsgBox "次の行を確認してください。" & _
+            vbCrLf & vbCrLf & errorList, _
+            vbExclamation, APP_TITLE
+
+        GoTo ExitHandler
+    End If
+
+    For rowNumber = DATA_FIRST_ROW To lastRow
+        If TodoRowHasData(todoSheet, rowNumber) Then
+            If IsTodoRowPendingValidation( _
+                todoSheet, rowNumber) Then
+
+                todoSheet.Cells( _
+                    rowNumber, COL_TODO_PROCESS_STATUS).Value = _
+                    PROCESS_STATUS_CONFIRMED
+
+                todoSheet.Cells( _
+                    rowNumber, COL_TODO_PREVIOUS_KEY).Value = _
+                    BuildTodoDataKey(todoSheet, rowNumber)
+            End If
+        End If
+    Next rowNumber
+
+    SortTodoListCore
+    RefreshTodoDisplayCore
+
+    MsgBox "変更内容を確認して並べ替えました。", _
+        vbInformation, APP_TITLE
+
+ExitHandler:
+    RestoreExcelState savedState
+    Exit Sub
+
+ErrorHandler:
+    ShowProcessError _
+        "ToDo変更の確認", _
+        SHEET_TODO_LIST, _
+        rowNumber, _
+        vbNullString, _
+        Err.Description
+
+    Resume ExitHandler
+End Sub
+
+Public Sub SortTodoList()
+    Dim savedState As TExcelState
+
+    On Error GoTo ErrorHandler
+
+    CaptureExcelState savedState
+
+    Application.ScreenUpdating = False
+    Application.EnableEvents = False
+
+    SortTodoListCore
+
+ExitHandler:
+    RestoreExcelState savedState
+    Exit Sub
+
+ErrorHandler:
+    ShowProcessError _
+        "ToDoリストの並べ替え", _
+        SHEET_TODO_LIST, _
+        0, _
+        vbNullString, _
+        Err.Description
+
+    Resume ExitHandler
+End Sub
+
+Public Sub RefreshTodoDisplay()
+    Dim savedState As TExcelState
+
+    On Error GoTo ErrorHandler
+
+    CaptureExcelState savedState
+    Application.ScreenUpdating = False
+
+    RefreshTodoDisplayCore
+
+ExitHandler:
+    RestoreExcelState savedState
+    Exit Sub
+
+ErrorHandler:
+    ShowProcessError _
+        "ToDoリストの表示更新", _
+        SHEET_TODO_LIST, _
+        0, _
+        vbNullString, _
+        Err.Description
+
+    Resume ExitHandler
+End Sub
+
+Public Function ValidateTodoRow( _
+    ByVal targetSheet As Worksheet, _
+    ByVal rowNumber As Long, _
+    ByRef errorMessage As String _
+) As Boolean
+
+    Dim todoDue As Date
+    Dim actualDue As Date
+    Dim taskType As String
+    Dim taskId As String
+    Dim priorityText As String
+    Dim descriptionText As String
+    Dim createdValue As Variant
+    Dim sourceRowValue As Variant
+
+    errorMessage = vbNullString
+
+    If rowNumber < DATA_FIRST_ROW Then
+        errorMessage = "データ行ではありません。"
+        Exit Function
+    End If
+
+    If Not IsValidExcelDate(targetSheet.Cells( _
+        rowNumber, COL_TODO_DUE).Value) Then
+
+        errorMessage = "ToDo納期が日付ではありません。"
+        Exit Function
+    End If
+
+    todoDue = DateOnlyValue(targetSheet.Cells( _
+        rowNumber, COL_TODO_DUE).Value)
+
+    targetSheet.Cells( _
+        rowNumber, COL_TODO_DUE).Value = todoDue
+
+    taskType = Trim$(CStr(GetSafeCellValue(targetSheet.Cells( _
+        rowNumber, COL_TODO_TASK_TYPE))))
+
+    If taskType <> TASK_TYPE_MANUAL _
+        And taskType <> TASK_TYPE_DAILY _
+        And taskType <> TASK_TYPE_RECURRING Then
+
+        errorMessage = "業務区分が不正です。"
+        Exit Function
+    End If
+
+    If taskType = TASK_TYPE_DAILY _
+        Or taskType = TASK_TYPE_RECURRING Then
+
+        actualDue = todoDue
+
+        targetSheet.Cells( _
+            rowNumber, COL_TODO_ACTUAL_DUE).Value = actualDue
+
+    Else
+        If Len(Trim$(CStr(GetSafeCellValue(targetSheet.Cells( _
+            rowNumber, COL_TODO_ACTUAL_DUE))))) = 0 Then
+
+            actualDue = todoDue
+
+            targetSheet.Cells( _
+                rowNumber, COL_TODO_ACTUAL_DUE).Value = actualDue
+
+        ElseIf IsValidExcelDate(targetSheet.Cells( _
+            rowNumber, COL_TODO_ACTUAL_DUE).Value) Then
+
+            actualDue = DateOnlyValue(targetSheet.Cells( _
+                rowNumber, COL_TODO_ACTUAL_DUE).Value)
+
+            targetSheet.Cells( _
+                rowNumber, COL_TODO_ACTUAL_DUE).Value = actualDue
+
+        Else
+            errorMessage = "実納期が日付ではありません。"
+            Exit Function
+        End If
+
+        If actualDue < todoDue Then
+            errorMessage = "実納期がToDo納期より前です。"
+            Exit Function
+        End If
+    End If
+
+    descriptionText = Trim$(CStr(GetSafeCellValue(targetSheet.Cells( _
+        rowNumber, COL_TODO_DESCRIPTION))))
+
+    If Len(descriptionText) = 0 Then
+        errorMessage = "行うことが空欄です。"
+        Exit Function
+    End If
+
+    priorityText = Trim$(CStr(GetSafeCellValue(targetSheet.Cells( _
+        rowNumber, COL_TODO_PRIORITY))))
+
+    If Not IsAllowedPriority(priorityText) Then
+        errorMessage = "優先度が不正です。"
+        Exit Function
+    End If
+
+    taskId = Trim$(CStr(GetSafeCellValue(targetSheet.Cells( _
+        rowNumber, COL_TODO_TASK_ID))))
+
+    If taskType <> TASK_TYPE_MANUAL Then
+        If Len(taskId) = 0 Then
+            errorMessage = "業務IDが空欄です。"
+            Exit Function
+        End If
+
+        If Not IsValidExcelDate(targetSheet.Cells( _
+            rowNumber, COL_TODO_ORIGINAL_DATE).Value) Then
+
+            errorMessage = "本来の予定日が不正です。"
+            Exit Function
+        End If
+    End If
+
+    createdValue = GetSafeCellValue(targetSheet.Cells( _
+        rowNumber, COL_TODO_CREATED_AT))
+
+    If Not IsDate(createdValue) Then
+        errorMessage = "登録日時が不正です。"
+        Exit Function
+    End If
+
+    sourceRowValue = GetSafeCellValue(targetSheet.Cells( _
+        rowNumber, COL_TODO_SOURCE_ROW))
+
+    If Not IsValidDataRowNumber( _
+        targetSheet, sourceRowValue) Then
+
+        errorMessage = "登録元行番号が不正です。"
+        Exit Function
+    End If
+
+    ValidateTodoRow = True
+End Function
+
+Private Sub SortTodoListCore()
+    Dim targetSheet As Worksheet
+    Dim lastRow As Long
+    Dim priorityOrder As String
+    Dim separator As String
+
+    If Not WorksheetExists(SHEET_TODO_LIST) Then
+        Err.Raise vbObjectError + 1100, _
+            "SortTodoListCore", _
+            "ToDoリストシートがありません。"
+    End If
+
+    Set targetSheet = ThisWorkbook.Worksheets(SHEET_TODO_LIST)
+    lastRow = GetLastDataRow(targetSheet)
+
+    If lastRow < DATA_FIRST_ROW Then
+        Exit Sub
+    End If
+
+    separator = Application.International(xlListSeparator)
+
+    priorityOrder = PRIORITY_HIGH & separator & _
+        PRIORITY_MEDIUM & separator & _
+        PRIORITY_LOW
+
+    With targetSheet.Sort
+        .SortFields.Clear
+
+        .SortFields.Add _
+            Key:=targetSheet.Range( _
+                targetSheet.Cells(DATA_FIRST_ROW, COL_TODO_DUE), _
+                targetSheet.Cells(lastRow, COL_TODO_DUE)), _
+            SortOn:=xlSortOnValues, _
+            Order:=xlAscending, _
+            DataOption:=xlSortNormal
+
+        .SortFields.Add _
+            Key:=targetSheet.Range( _
+                targetSheet.Cells( _
+                    DATA_FIRST_ROW, COL_TODO_PRIORITY), _
+                targetSheet.Cells( _
+                    lastRow, COL_TODO_PRIORITY)), _
+            SortOn:=xlSortOnValues, _
+            Order:=xlAscending, _
+            CustomOrder:=priorityOrder, _
+            DataOption:=xlSortNormal
+
+        .SortFields.Add _
+            Key:=targetSheet.Range( _
+                targetSheet.Cells( _
+                    DATA_FIRST_ROW, COL_TODO_ACTUAL_DUE), _
+                targetSheet.Cells( _
+                    lastRow, COL_TODO_ACTUAL_DUE)), _
+            SortOn:=xlSortOnValues, _
+            Order:=xlAscending, _
+            DataOption:=xlSortNormal
+
+        .SortFields.Add _
+            Key:=targetSheet.Range( _
+                targetSheet.Cells( _
+                    DATA_FIRST_ROW, COL_TODO_CREATED_AT), _
+                targetSheet.Cells( _
+                    lastRow, COL_TODO_CREATED_AT)), _
+            SortOn:=xlSortOnValues, _
+            Order:=xlAscending, _
+            DataOption:=xlSortNormal
+
+        .SetRange targetSheet.Range( _
+            targetSheet.Cells(HEADER_ROW, COL_TODO_FIRST), _
+            targetSheet.Cells(lastRow, COL_TODO_LAST))
+
+        .Header = xlYes
+        .MatchCase = False
+        .Orientation = xlTopToBottom
+        .Apply
+    End With
+End Sub
+
+Private Sub RefreshTodoDisplayCore()
+    Dim targetSheet As Worksheet
+    Dim lastLayoutRow As Long
+    Dim lastDataRow As Long
+    Dim displayRange As Range
+    Dim dateRange As Range
+    Dim todayCondition As FormatCondition
+    Dim overdueCondition As FormatCondition
+
+    If Not WorksheetExists(SHEET_TODO_LIST) Then
+        Exit Sub
+    End If
+
+    Set targetSheet = ThisWorkbook.Worksheets(SHEET_TODO_LIST)
+
+    lastLayoutRow = DATA_FIRST_ROW + ABSOLUTE_TODO_MAX - 1
+    lastDataRow = GetLastDataRow(targetSheet)
+
+    Set displayRange = targetSheet.Range( _
+        targetSheet.Cells(DATA_FIRST_ROW, COL_TODO_DUE), _
+        targetSheet.Cells(lastLayoutRow, COL_TODO_CHECK))
+
+    With displayRange
+        .Interior.Color = COLOR_WHITE
+        .Font.Color = COLOR_TEXT_NAVY
+        .Font.Name = "Yu Gothic UI"
+        .Font.Size = 11
+        .VerticalAlignment = xlCenter
+        .Borders.LineStyle = xlNone
+    End With
+
+    targetSheet.Range( _
+        targetSheet.Cells(DATA_FIRST_ROW, COL_TODO_DUE), _
+        targetSheet.Cells( _
+            lastLayoutRow, COL_TODO_ACTUAL_DUE)).NumberFormat = _
+        DATE_DISPLAY_FORMAT
+
+    targetSheet.Range( _
+        targetSheet.Cells(DATA_FIRST_ROW, COL_TODO_NO), _
+        targetSheet.Cells( _
+            lastLayoutRow, COL_TODO_NO)).NumberFormat = _
+        NO_DISPLAY_FORMAT
+
+    targetSheet.Range( _
+        targetSheet.Cells(DATA_FIRST_ROW, COL_TODO_CHECK), _
+        targetSheet.Cells( _
+            lastLayoutRow, COL_TODO_CHECK)).HorizontalAlignment = _
+        xlCenter
+
+    If lastDataRow >= DATA_FIRST_ROW Then
+        ApplyTodoBorders targetSheet.Range( _
+            targetSheet.Cells(DATA_FIRST_ROW, COL_TODO_DUE), _
+            targetSheet.Cells(lastDataRow, COL_TODO_CHECK))
+    End If
+
+    Set dateRange = targetSheet.Range( _
+        targetSheet.Cells(DATA_FIRST_ROW, COL_TODO_DUE), _
+        targetSheet.Cells(lastLayoutRow, COL_TODO_DUE))
+
+    dateRange.FormatConditions.Delete
+
+    Set todayCondition = dateRange.FormatConditions.Add( _
+        Type:=xlExpression, _
+        Formula1:="=AND(ISNUMBER(B3),B3=TODAY())")
+
+    todayCondition.Interior.Color = COLOR_INPUT_BACKGROUND
+    todayCondition.Font.Color = COLOR_TODAY_TEXT
+    todayCondition.Font.Bold = True
+
+    Set overdueCondition = dateRange.FormatConditions.Add( _
+        Type:=xlExpression, _
+        Formula1:="=AND(ISNUMBER(B3),B3<TODAY())")
+
+    overdueCondition.Font.Color = COLOR_ERROR_TEXT
+End Sub
+
+Private Function TodoRowHasData( _
+    ByVal targetSheet As Worksheet, _
+    ByVal rowNumber As Long _
+) As Boolean
+
+    TodoRowHasData = _
+        (Application.CountA(targetSheet.Range( _
+            targetSheet.Cells(rowNumber, COL_TODO_FIRST), _
+            targetSheet.Cells(rowNumber, COL_TODO_LAST))) > 0)
+End Function
+
+Private Function IsTodoRowPendingValidation( _
+    ByVal targetSheet As Worksheet, _
+    ByVal rowNumber As Long _
+) As Boolean
+
+    Dim processStatus As String
+    Dim previousKey As String
+
+    processStatus = Trim$(CStr(GetSafeCellValue(targetSheet.Cells( _
+        rowNumber, COL_TODO_PROCESS_STATUS))))
+
+    If processStatus = PROCESS_STATUS_UNCONFIRMED Then
+        IsTodoRowPendingValidation = True
+        Exit Function
+    End If
+
+    previousKey = CStr(GetSafeCellValue(targetSheet.Cells( _
+        rowNumber, COL_TODO_PREVIOUS_KEY)))
+
+    IsTodoRowPendingValidation = _
+        (BuildTodoDataKey(targetSheet, rowNumber) <> previousKey)
+End Function
+
+Private Function IsAllowedPriority( _
+    ByVal priorityText As String _
+) As Boolean
+
+    Select Case Trim$(priorityText)
+        Case vbNullString, _
+            PRIORITY_HIGH, _
+            PRIORITY_MEDIUM, _
+            PRIORITY_LOW
+
+            IsAllowedPriority = True
+    End Select
+End Function
+
+Private Function IsValidDataRowNumber( _
+    ByVal targetSheet As Worksheet, _
+    ByVal targetValue As Variant _
+) As Boolean
+
+    Dim numericValue As Double
+
+    On Error GoTo InvalidValue
+
+    If Not IsNumeric(targetValue) Then
+        Exit Function
+    End If
+
+    numericValue = CDbl(targetValue)
+
+    If numericValue <> Fix(numericValue) Then
+        Exit Function
+    End If
+
+    If numericValue < DATA_FIRST_ROW Then
+        Exit Function
+    End If
+
+    If numericValue > targetSheet.Rows.Count Then
+        Exit Function
+    End If
+
+    IsValidDataRowNumber = True
+    Exit Function
+
+InvalidValue:
+End Function
+
+Private Function BuildTodoDataKey( _
+    ByVal targetSheet As Worksheet, _
+    ByVal rowNumber As Long _
+) As String
+
+    Dim todoDateText As String
+    Dim actualDateText As String
+    Dim noText As String
+    Dim descriptionText As String
+
+    If IsValidExcelDate(targetSheet.Cells( _
+        rowNumber, COL_TODO_DUE).Value) Then
+
+        todoDateText = Format$(DateOnlyValue(targetSheet.Cells( _
+            rowNumber, COL_TODO_DUE).Value), "yyyymmdd")
+    End If
+
+    If IsValidExcelDate(targetSheet.Cells( _
+        rowNumber, COL_TODO_ACTUAL_DUE).Value) Then
+
+        actualDateText = Format$(DateOnlyValue(targetSheet.Cells( _
+            rowNumber, COL_TODO_ACTUAL_DUE).Value), "yyyymmdd")
+    End If
+
+    noText = CStr(GetSafeCellValue(targetSheet.Cells( _
+        rowNumber, COL_TODO_NO)))
+
+    descriptionText = CStr(GetSafeCellValue(targetSheet.Cells( _
+        rowNumber, COL_TODO_DESCRIPTION)))
+
+    BuildTodoDataKey = _
+        todoDateText & "|" & _
+        actualDateText & "|" & _
+        noText & "|" & _
+        descriptionText
+End Function
+
+Private Sub ResetManualInputValues( _
+    ByVal inputSheet As Worksheet _
+)
+
+    With inputSheet
+        .Cells( _
+            TODO_ADD_INPUT_ROW, COL_ADD_TODO_DUE).Value = Date
+
+        .Cells( _
+            TODO_ADD_INPUT_ROW, COL_ADD_ACTUAL_DUE).Value = Date
+
+        .Range( _
+            .Cells(TODO_ADD_INPUT_ROW, COL_ADD_NO), _
+            .Cells( _
+                TODO_ADD_INPUT_ROW, COL_ADD_PRIORITY)).ClearContents
+    End With
+
+    ResetManualInputColors inputSheet
+End Sub
+
+Private Sub ResetManualInputColors( _
+    ByVal inputSheet As Worksheet _
+)
+
+    With inputSheet.Range( _
+        inputSheet.Cells( _
+            TODO_ADD_INPUT_ROW, COL_ADD_TODO_DUE), _
+        inputSheet.Cells( _
+            TODO_ADD_INPUT_ROW, COL_ADD_PRIORITY))
+
+        .Interior.Color = COLOR_INPUT_BACKGROUND
+        .Font.Color = COLOR_TEXT_NAVY
+    End With
+End Sub
+
+Private Sub MarkInputError(ByVal targetCell As Range)
+    targetCell.Interior.Color = COLOR_ERROR_BACKGROUND
+    targetCell.Font.Color = COLOR_ERROR_TEXT
+End Sub
+
+Private Sub ClearTodoErrorColors( _
+    ByVal targetSheet As Worksheet _
+)
+
+    Dim lastLayoutRow As Long
+
+    lastLayoutRow = DATA_FIRST_ROW + ABSOLUTE_TODO_MAX - 1
+
+    With targetSheet.Range( _
+        targetSheet.Cells(DATA_FIRST_ROW, COL_TODO_DUE), _
+        targetSheet.Cells( _
+            lastLayoutRow, COL_TODO_DESCRIPTION))
+
+        .Interior.Color = COLOR_WHITE
+        .Font.Color = COLOR_TEXT_NAVY
+    End With
+End Sub
+
+Private Sub MarkTodoRowError( _
+    ByVal targetSheet As Worksheet, _
+    ByVal rowNumber As Long _
+)
+
+    With targetSheet.Range( _
+        targetSheet.Cells(rowNumber, COL_TODO_DUE), _
+        targetSheet.Cells(rowNumber, COL_TODO_DESCRIPTION))
+
+        .Interior.Color = COLOR_ERROR_BACKGROUND
+        .Font.Color = COLOR_ERROR_TEXT
+    End With
+End Sub
+
+Private Sub ApplyTodoBorders(ByVal targetRange As Range)
+    Dim borderIndex As Variant
+
+    For Each borderIndex In Array( _
+        xlEdgeLeft, _
+        xlEdgeTop, _
+        xlEdgeBottom, _
+        xlEdgeRight, _
+        xlInsideVertical, _
+        xlInsideHorizontal)
+
+        With targetRange.Borders(borderIndex)
+            .LineStyle = xlContinuous
+            .Color = COLOR_BORDER
+            .Weight = xlThin
+        End With
+    Next borderIndex
+End Sub
+
