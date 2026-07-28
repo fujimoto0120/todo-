@@ -1,0 +1,1666 @@
+Option Explicit
+
+' 初期設定で使う内部名だけここに置く
+Private Const SYSTEM_DATE_LIST_COLUMN As Long = 5
+Private Const TODO_DATE_LIST_NAME As String = "TodoDateChoices"
+Private Const UI_FONT_NAME As String = "Yu Gothic UI"
+
+Public Sub InitializeTodoSystem()
+    Dim savedState As TExcelState
+    Dim originalSheetName As String
+
+    On Error GoTo ErrorHandler
+
+    CaptureExcelState savedState
+    originalSheetName = ActiveSheet.Name
+
+    With Application
+        .ScreenUpdating = False
+        .EnableEvents = False
+        .Calculation = xlCalculationManual
+        .DisplayAlerts = False
+    End With
+
+    CreateRequiredSheets
+    SetupAllSheets
+
+    ThisWorkbook.Worksheets(SHEET_SYSTEM).Visible = xlSheetVeryHidden
+    ThisWorkbook.Worksheets(SHEET_BACKUP).Visible = xlSheetVeryHidden
+
+    If WorksheetExists(originalSheetName) Then
+        ThisWorkbook.Worksheets(originalSheetName).Activate
+    Else
+        ThisWorkbook.Worksheets(SHEET_TODO_ADD).Activate
+    End If
+
+    MsgBox "初期設定が完了しました。", vbInformation, APP_TITLE
+
+ExitHandler:
+    RestoreExcelState savedState
+    Exit Sub
+
+ErrorHandler:
+    ShowProcessError "初期設定", vbNullString, 0, _
+        vbNullString, Err.Description
+
+    Resume ExitHandler
+End Sub
+
+Public Sub CreateRequiredSheets()
+    Dim sheetNames As Variant
+    Dim sheetNameValue As Variant
+    Dim newSheet As Worksheet
+
+    sheetNames = Array( _
+        SHEET_TODO_ADD, _
+        SHEET_TODO_LIST, _
+        SHEET_COMPLETED, _
+        SHEET_DAILY, _
+        SHEET_RECURRING, _
+        SHEET_HOLIDAY, _
+        SHEET_SETTINGS, _
+        SHEET_SYSTEM, _
+        SHEET_BACKUP)
+
+    For Each sheetNameValue In sheetNames
+        If Not WorksheetExists(CStr(sheetNameValue)) Then
+            Set newSheet = ThisWorkbook.Worksheets.Add( _
+                After:=ThisWorkbook.Worksheets( _
+                    ThisWorkbook.Worksheets.Count))
+
+            newSheet.Name = CStr(sheetNameValue)
+        End If
+    Next sheetNameValue
+End Sub
+
+Public Sub SetupAllSheets()
+    SetupSystemManagementSheet
+    SetupSettingsSheet
+    RefreshDateChoiceList
+
+    SetupTodoAddSheet
+    SetupTodoListSheet
+    SetupCompletedSheet
+    SetupDailySheet
+    SetupRecurringSheet
+    SetupHolidaySheet
+    SetupBackupSheet
+
+    RebuildDailyUseCheckboxes
+    RebuildRecurringUseCheckboxes
+    SetupVisibleSheetWindows
+
+    ThisWorkbook.Worksheets(SHEET_SYSTEM).Visible = xlSheetVeryHidden
+    ThisWorkbook.Worksheets(SHEET_BACKUP).Visible = xlSheetVeryHidden
+End Sub
+
+Public Sub RefreshSystemLayout()
+    Dim savedState As TExcelState
+    Dim originalSheetName As String
+
+    On Error GoTo ErrorHandler
+
+    CaptureExcelState savedState
+    originalSheetName = ActiveSheet.Name
+
+    With Application
+        .ScreenUpdating = False
+        .EnableEvents = False
+        .Calculation = xlCalculationManual
+        .DisplayAlerts = False
+    End With
+
+    CreateRequiredSheets
+    SetupAllSheets
+
+    If WorksheetExists(originalSheetName) Then
+        ThisWorkbook.Worksheets(originalSheetName).Activate
+    Else
+        ThisWorkbook.Worksheets(SHEET_TODO_ADD).Activate
+    End If
+
+    MsgBox "初期設定を更新しました。", vbInformation, APP_TITLE
+
+ExitHandler:
+    RestoreExcelState savedState
+    Exit Sub
+
+ErrorHandler:
+    ShowProcessError "初期設定の更新", vbNullString, 0, _
+        vbNullString, Err.Description
+
+    Resume ExitHandler
+End Sub
+
+Private Sub SetupTodoAddSheet()
+    Dim targetSheet As Worksheet
+    Dim headers As Variant
+
+    Set targetSheet = ThisWorkbook.Worksheets(SHEET_TODO_ADD)
+
+    headers = Array( _
+        "ToDo納期", _
+        "実納期", _
+        "No", _
+        "行うこと", _
+        "優先度")
+
+    PrepareVisibleSheet targetSheet, 20, 10
+    SetupTitleBand targetSheet, "ToDoを追加", 2, 10
+    SetHeaders targetSheet, headers, COL_ADD_TODO_DUE
+
+    With targetSheet
+        .Columns(COL_ADD_TODO_DUE).ColumnWidth = 14
+        .Columns(COL_ADD_ACTUAL_DUE).ColumnWidth = 14
+        .Columns(COL_ADD_NO).ColumnWidth = 12
+        .Columns(COL_ADD_DESCRIPTION).ColumnWidth = 38
+        .Columns(COL_ADD_PRIORITY).ColumnWidth = 11
+        .Columns(7).ColumnWidth = 3
+        .Columns("H:J").ColumnWidth = 11
+
+        .Rows(TODO_ADD_INPUT_ROW).RowHeight = 32
+
+        With .Range( _
+            .Cells(TODO_ADD_INPUT_ROW, COL_ADD_TODO_DUE), _
+            .Cells(TODO_ADD_INPUT_ROW, COL_ADD_PRIORITY))
+
+            .Interior.Color = COLOR_INPUT_BACKGROUND
+            .Font.Color = COLOR_TEXT_NAVY
+            .VerticalAlignment = xlCenter
+        End With
+
+        ApplyBorders .Range( _
+            .Cells(TODO_ADD_INPUT_ROW, COL_ADD_TODO_DUE), _
+            .Cells(TODO_ADD_INPUT_ROW, COL_ADD_PRIORITY)), _
+            COLOR_INPUT_BORDER
+
+        .Cells( _
+            TODO_ADD_INPUT_ROW, _
+            COL_ADD_TODO_DUE).NumberFormat = DATE_DISPLAY_FORMAT
+
+        .Cells( _
+            TODO_ADD_INPUT_ROW, _
+            COL_ADD_ACTUAL_DUE).NumberFormat = DATE_DISPLAY_FORMAT
+
+        .Cells( _
+            TODO_ADD_INPUT_ROW, _
+            COL_ADD_NO).NumberFormat = NO_DISPLAY_FORMAT
+
+        If IsEmpty(.Cells( _
+            TODO_ADD_INPUT_ROW, _
+            COL_ADD_TODO_DUE).Value) Then
+
+            .Cells( _
+                TODO_ADD_INPUT_ROW, _
+                COL_ADD_TODO_DUE).Value = Date
+        End If
+
+        If IsEmpty(.Cells( _
+            TODO_ADD_INPUT_ROW, _
+            COL_ADD_ACTUAL_DUE).Value) Then
+
+            .Cells( _
+                TODO_ADD_INPUT_ROW, _
+                COL_ADD_ACTUAL_DUE).Value = Date
+        End If
+    End With
+
+    ApplyDateListValidation targetSheet.Range( _
+        targetSheet.Cells( _
+            TODO_ADD_INPUT_ROW, _
+            COL_ADD_TODO_DUE), _
+        targetSheet.Cells( _
+            TODO_ADD_INPUT_ROW, _
+            COL_ADD_ACTUAL_DUE))
+
+    ApplyListValidation _
+        targetSheet.Cells( _
+            TODO_ADD_INPUT_ROW, _
+            COL_ADD_PRIORITY), _
+        Array(PRIORITY_HIGH, PRIORITY_MEDIUM, PRIORITY_LOW)
+
+    AddActionButton _
+        targetSheet, _
+        BUTTON_ADD_TODO, _
+        "ToDoを追加", _
+        "H2", _
+        "J3", _
+        "AddManualTodo"
+End Sub
+
+Private Sub SetupTodoListSheet()
+    Dim targetSheet As Worksheet
+    Dim headers As Variant
+    Dim lastLayoutRow As Long
+
+    Set targetSheet = ThisWorkbook.Worksheets(SHEET_TODO_LIST)
+    lastLayoutRow = DATA_FIRST_ROW + ABSOLUTE_TODO_MAX - 1
+
+    headers = Array( _
+        "ToDo納期", _
+        "実納期", _
+        "No", _
+        "行うこと", _
+        "チェック")
+
+    PrepareVisibleSheet targetSheet, lastLayoutRow, 19
+    SetupTitleBand targetSheet, "ToDoリスト", 2, 19
+    SetHeaders targetSheet, headers, COL_TODO_DUE
+
+    With targetSheet
+        .Columns(COL_TODO_DUE).ColumnWidth = 14
+        .Columns(COL_TODO_ACTUAL_DUE).ColumnWidth = 14
+        .Columns(COL_TODO_NO).ColumnWidth = 12
+        .Columns(COL_TODO_DESCRIPTION).ColumnWidth = 42
+        .Columns(COL_TODO_CHECK).ColumnWidth = 11
+        .Columns("Q:S").ColumnWidth = 11
+
+        .Range( _
+            .Cells(DATA_FIRST_ROW, COL_TODO_DUE), _
+            .Cells(lastLayoutRow, COL_TODO_CHECK)).Interior.Color = _
+            COLOR_WHITE
+
+        .Range( _
+            .Cells(DATA_FIRST_ROW, COL_TODO_DUE), _
+            .Cells(lastLayoutRow, COL_TODO_ACTUAL_DUE)).NumberFormat = _
+            DATE_DISPLAY_FORMAT
+
+        .Range( _
+            .Cells(DATA_FIRST_ROW, COL_TODO_NO), _
+            .Cells(lastLayoutRow, COL_TODO_NO)).NumberFormat = _
+            NO_DISPLAY_FORMAT
+
+        .Range( _
+            .Cells(DATA_FIRST_ROW, COL_TODO_TASK_ID), _
+            .Cells(lastLayoutRow, COL_TODO_TASK_ID)).NumberFormat = _
+            NO_DISPLAY_FORMAT
+
+        .Range( _
+            .Cells(DATA_FIRST_ROW, COL_TODO_ORIGINAL_DATE), _
+            .Cells(lastLayoutRow, COL_TODO_ORIGINAL_DATE)).NumberFormat = _
+            DATE_DISPLAY_FORMAT
+
+        .Range( _
+            .Cells(DATA_FIRST_ROW, COL_TODO_CREATED_AT), _
+            .Cells(lastLayoutRow, COL_TODO_COMPLETED_AT)).NumberFormat = _
+            DATE_TIME_DISPLAY_FORMAT
+
+        .Range( _
+            .Cells(DATA_FIRST_ROW, COL_TODO_CHECK), _
+            .Cells(lastLayoutRow, COL_TODO_CHECK)).HorizontalAlignment = _
+            xlCenter
+
+        .Range( _
+            .Columns(COL_TODO_PRIORITY), _
+            .Columns(COL_TODO_PREVIOUS_KEY)).EntireColumn.Hidden = True
+
+        ResetAutoFilter _
+            targetSheet, _
+            COL_TODO_DUE, _
+            COL_TODO_CHECK
+    End With
+
+    ApplyTodoDateConditionalFormatting _
+        targetSheet, _
+        lastLayoutRow
+
+    ApplyExistingDataBorders _
+        targetSheet, _
+        COL_TODO_DUE, _
+        COL_TODO_CHECK, _
+        COL_TODO_DESCRIPTION
+
+    AddActionButton _
+        targetSheet, _
+        BUTTON_VALIDATE_SORT, _
+        "変更を確認して並べ替え", _
+        "Q2", _
+        "S3", _
+        "ValidateAndSortTodoChanges"
+
+    AddActionButton _
+        targetSheet, _
+        BUTTON_REGISTER_DAILY_TODAY, _
+        "今日の毎日業務を登録", _
+        "Q5", _
+        "S6", _
+        "RegisterTodayDailyTasks"
+
+    AddActionButton _
+        targetSheet, _
+        BUTTON_REBUILD_CHECKBOXES, _
+        "チェックを作り直す", _
+        "Q8", _
+        "S9", _
+        "RebuildAllCheckboxes"
+End Sub
+
+Private Sub SetupCompletedSheet()
+    Dim targetSheet As Worksheet
+    Dim headers As Variant
+    Dim lastLayoutRow As Long
+    Dim currentLastRow As Long
+
+    Set targetSheet = ThisWorkbook.Worksheets(SHEET_COMPLETED)
+
+    currentLastRow = GetLastDataRow(targetSheet)
+    lastLayoutRow = DATA_FIRST_ROW + ABSOLUTE_TODO_MAX - 1
+
+    If currentLastRow > lastLayoutRow Then
+        lastLayoutRow = currentLastRow
+    End If
+
+    headers = Array( _
+        "ToDo納期", _
+        "実納期", _
+        "No", _
+        "行うこと", _
+        "チェック")
+
+    PrepareVisibleSheet targetSheet, lastLayoutRow, 19
+    SetupTitleBand targetSheet, "完了済み", 2, 19
+    SetHeaders targetSheet, headers, COL_TODO_DUE
+
+    With targetSheet
+        .Columns(COL_TODO_DUE).ColumnWidth = 14
+        .Columns(COL_TODO_ACTUAL_DUE).ColumnWidth = 14
+        .Columns(COL_TODO_NO).ColumnWidth = 12
+        .Columns(COL_TODO_DESCRIPTION).ColumnWidth = 42
+        .Columns(COL_TODO_CHECK).ColumnWidth = 11
+        .Columns("Q:S").ColumnWidth = 11
+
+        .Range( _
+            .Cells(DATA_FIRST_ROW, COL_TODO_DUE), _
+            .Cells(lastLayoutRow, COL_TODO_CHECK)).Interior.Color = _
+            COLOR_WHITE
+
+        .Range( _
+            .Cells(DATA_FIRST_ROW, COL_TODO_DUE), _
+            .Cells(lastLayoutRow, COL_TODO_ACTUAL_DUE)).NumberFormat = _
+            DATE_DISPLAY_FORMAT
+
+        .Range( _
+            .Cells(DATA_FIRST_ROW, COL_TODO_NO), _
+            .Cells(lastLayoutRow, COL_TODO_NO)).NumberFormat = _
+            NO_DISPLAY_FORMAT
+
+        .Range( _
+            .Cells(DATA_FIRST_ROW, COL_TODO_TASK_ID), _
+            .Cells(lastLayoutRow, COL_TODO_TASK_ID)).NumberFormat = _
+            NO_DISPLAY_FORMAT
+
+        .Range( _
+            .Cells(DATA_FIRST_ROW, COL_TODO_ORIGINAL_DATE), _
+            .Cells(lastLayoutRow, COL_TODO_ORIGINAL_DATE)).NumberFormat = _
+            DATE_DISPLAY_FORMAT
+
+        .Range( _
+            .Cells(DATA_FIRST_ROW, COL_TODO_CREATED_AT), _
+            .Cells(lastLayoutRow, COL_TODO_COMPLETED_AT)).NumberFormat = _
+            DATE_TIME_DISPLAY_FORMAT
+
+        .Range( _
+            .Cells(DATA_FIRST_ROW, COL_TODO_CHECK), _
+            .Cells(lastLayoutRow, COL_TODO_CHECK)).HorizontalAlignment = _
+            xlCenter
+
+        .Range( _
+            .Columns(COL_TODO_PRIORITY), _
+            .Columns(COL_TODO_PREVIOUS_KEY)).EntireColumn.Hidden = True
+
+        ResetAutoFilter _
+            targetSheet, _
+            COL_TODO_DUE, _
+            COL_TODO_CHECK
+    End With
+
+    ApplyExistingDataBorders _
+        targetSheet, _
+        COL_TODO_DUE, _
+        COL_TODO_CHECK, _
+        COL_TODO_DESCRIPTION
+
+    AddActionButton _
+        targetSheet, _
+        BUTTON_RESTORE_COMPLETED, _
+        "未完了へ戻す", _
+        "Q2", _
+        "S3", _
+        "RestoreSelectedCompletedTodos"
+
+    AddActionButton _
+        targetSheet, _
+        BUTTON_DELETE_EXPIRED, _
+        "期限を過ぎた完了データを削除", _
+        "Q5", _
+        "S6", _
+        "DeleteExpiredCompletedTodos"
+End Sub
+
+Private Sub SetupDailySheet()
+    Dim targetSheet As Worksheet
+    Dim headers As Variant
+    Dim lastLayoutRow As Long
+
+    Set targetSheet = ThisWorkbook.Worksheets(SHEET_DAILY)
+    lastLayoutRow = DATA_FIRST_ROW + ABSOLUTE_DAILY_MAX - 1
+
+    headers = Array( _
+        "使用", _
+        "業務ID", _
+        "実行区分", _
+        "No", _
+        "行うこと", _
+        "優先度", _
+        "更新状態")
+
+    PrepareVisibleSheet targetSheet, lastLayoutRow, 12
+    SetupTitleBand targetSheet, "毎日行う業務", 2, 12
+    SetHeaders targetSheet, headers, COL_DAILY_ENABLED
+
+    With targetSheet
+        .Columns(COL_DAILY_ENABLED).ColumnWidth = 8
+        .Columns(COL_DAILY_ID).ColumnWidth = 12
+        .Columns(COL_DAILY_EXECUTION_TYPE).ColumnWidth = 14
+        .Columns(COL_DAILY_NO).ColumnWidth = 12
+        .Columns(COL_DAILY_DESCRIPTION).ColumnWidth = 38
+        .Columns(COL_DAILY_PRIORITY).ColumnWidth = 11
+        .Columns(COL_DAILY_UPDATE_STATUS).ColumnWidth = 12
+        .Columns("J:L").ColumnWidth = 11
+
+        .Range( _
+            .Cells(DATA_FIRST_ROW, COL_DAILY_ENABLED), _
+            .Cells(lastLayoutRow, COL_DAILY_UPDATE_STATUS)).Interior.Color = _
+            COLOR_WHITE
+
+        .Range( _
+            .Cells(DATA_FIRST_ROW, COL_DAILY_ENABLED), _
+            .Cells(lastLayoutRow, COL_DAILY_ENABLED)).NumberFormat = ";;;"
+
+        .Range( _
+            .Cells(DATA_FIRST_ROW, COL_DAILY_ID), _
+            .Cells(lastLayoutRow, COL_DAILY_ID)).NumberFormat = _
+            NO_DISPLAY_FORMAT
+
+        .Range( _
+            .Cells(DATA_FIRST_ROW, COL_DAILY_NO), _
+            .Cells(lastLayoutRow, COL_DAILY_NO)).NumberFormat = _
+            NO_DISPLAY_FORMAT
+
+        ResetAutoFilter _
+            targetSheet, _
+            COL_DAILY_ENABLED, _
+            COL_DAILY_UPDATE_STATUS
+    End With
+
+    ApplyListValidation _
+        targetSheet.Range( _
+            targetSheet.Cells( _
+                DATA_FIRST_ROW, _
+                COL_DAILY_EXECUTION_TYPE), _
+            targetSheet.Cells( _
+                lastLayoutRow, _
+                COL_DAILY_EXECUTION_TYPE)), _
+        Array( _
+            DAILY_TYPE_EVERY_DAY, _
+            DAILY_TYPE_BUSINESS_DAY)
+
+    ApplyListValidation _
+        targetSheet.Range( _
+            targetSheet.Cells( _
+                DATA_FIRST_ROW, _
+                COL_DAILY_PRIORITY), _
+            targetSheet.Cells( _
+                lastLayoutRow, _
+                COL_DAILY_PRIORITY)), _
+        Array( _
+            PRIORITY_HIGH, _
+            PRIORITY_MEDIUM, _
+            PRIORITY_LOW)
+
+    ApplyExistingDataBorders _
+        targetSheet, _
+        COL_DAILY_ENABLED, _
+        COL_DAILY_UPDATE_STATUS, _
+        COL_DAILY_DESCRIPTION
+
+    AddActionButton _
+        targetSheet, _
+        BUTTON_ASSIGN_DAILY_IDS, _
+        "IDを採番", _
+        "J2", _
+        "L3", _
+        "AssignDailyTaskIds"
+
+    AddActionButton _
+        targetSheet, _
+        BUTTON_REGISTER_DAILY_TODAY, _
+        "今日の業務を登録", _
+        "J5", _
+        "L6", _
+        "RegisterTodayDailyTasks"
+End Sub
+
+Private Sub SetupRecurringSheet()
+    Dim targetSheet As Worksheet
+    Dim headers As Variant
+    Dim lastLayoutRow As Long
+
+    Set targetSheet = ThisWorkbook.Worksheets(SHEET_RECURRING)
+    lastLayoutRow = DATA_FIRST_ROW + ABSOLUTE_RECURRING_MAX - 1
+
+    headers = Array( _
+        "使用", _
+        "定期業務ID", _
+        "繰り返し種別", _
+        "曜日", _
+        "週番号", _
+        "日", _
+        "休日調整", _
+        "初回予定日", _
+        "No", _
+        "行うこと", _
+        "優先度")
+
+    PrepareVisibleSheet targetSheet, lastLayoutRow, 16
+    SetupTitleBand targetSheet, "定期業務", 2, 16
+    SetHeaders targetSheet, headers, COL_RECURRING_ENABLED
+
+    With targetSheet
+        .Columns(COL_RECURRING_ENABLED).ColumnWidth = 8
+        .Columns(COL_RECURRING_ID).ColumnWidth = 13
+        .Columns(COL_RECURRING_TYPE).ColumnWidth = 20
+        .Columns(COL_RECURRING_WEEKDAY).ColumnWidth = 11
+        .Columns(COL_RECURRING_WEEK_NUMBER).ColumnWidth = 10
+        .Columns(COL_RECURRING_DAY).ColumnWidth = 8
+        .Columns(COL_RECURRING_HOLIDAY_ADJUSTMENT).ColumnWidth = 13
+        .Columns(COL_RECURRING_FIRST_DATE).ColumnWidth = 14
+        .Columns(COL_RECURRING_NO).ColumnWidth = 12
+        .Columns(COL_RECURRING_DESCRIPTION).ColumnWidth = 36
+        .Columns(COL_RECURRING_PRIORITY).ColumnWidth = 11
+        .Columns("N:P").ColumnWidth = 11
+
+        .Range( _
+            .Cells(DATA_FIRST_ROW, COL_RECURRING_ENABLED), _
+            .Cells(lastLayoutRow, COL_RECURRING_PRIORITY)).Interior.Color = _
+            COLOR_WHITE
+
+        .Range( _
+            .Cells(DATA_FIRST_ROW, COL_RECURRING_ENABLED), _
+            .Cells(lastLayoutRow, COL_RECURRING_ENABLED)).NumberFormat = ";;;"
+
+        .Range( _
+            .Cells(DATA_FIRST_ROW, COL_RECURRING_ID), _
+            .Cells(lastLayoutRow, COL_RECURRING_ID)).NumberFormat = _
+            NO_DISPLAY_FORMAT
+
+        .Range( _
+            .Cells(DATA_FIRST_ROW, COL_RECURRING_FIRST_DATE), _
+            .Cells(lastLayoutRow, COL_RECURRING_FIRST_DATE)).NumberFormat = _
+            DATE_DISPLAY_FORMAT
+
+        .Range( _
+            .Cells(DATA_FIRST_ROW, COL_RECURRING_NO), _
+            .Cells(lastLayoutRow, COL_RECURRING_NO)).NumberFormat = _
+            NO_DISPLAY_FORMAT
+
+        ResetAutoFilter _
+            targetSheet, _
+            COL_RECURRING_ENABLED, _
+            COL_RECURRING_PRIORITY
+    End With
+
+    ApplyListValidation _
+        targetSheet.Range( _
+            targetSheet.Cells( _
+                DATA_FIRST_ROW, _
+                COL_RECURRING_TYPE), _
+            targetSheet.Cells( _
+                lastLayoutRow, _
+                COL_RECURRING_TYPE)), _
+        Array( _
+            RECURRING_TYPE_WEEKLY, _
+            RECURRING_TYPE_MONTHLY_DAY, _
+            RECURRING_TYPE_NTH_WEEKDAY, _
+            RECURRING_TYPE_LAST_WEEKDAY, _
+            RECURRING_TYPE_MONTH_END, _
+            RECURRING_TYPE_LAST_BUSINESS_DAY)
+
+    ApplyListValidation _
+        targetSheet.Range( _
+            targetSheet.Cells( _
+                DATA_FIRST_ROW, _
+                COL_RECURRING_WEEKDAY), _
+            targetSheet.Cells( _
+                lastLayoutRow, _
+                COL_RECURRING_WEEKDAY)), _
+        Array( _
+            "月曜日", _
+            "火曜日", _
+            "水曜日", _
+            "木曜日", _
+            "金曜日", _
+            "土曜日", _
+            "日曜日")
+
+    ApplyListValidation _
+        targetSheet.Range( _
+            targetSheet.Cells( _
+                DATA_FIRST_ROW, _
+                COL_RECURRING_WEEK_NUMBER), _
+            targetSheet.Cells( _
+                lastLayoutRow, _
+                COL_RECURRING_WEEK_NUMBER)), _
+        Array("1", "2", "3", "4", "5")
+
+    ApplyWholeNumberValidation _
+        targetSheet.Range( _
+            targetSheet.Cells( _
+                DATA_FIRST_ROW, _
+                COL_RECURRING_DAY), _
+            targetSheet.Cells( _
+                lastLayoutRow, _
+                COL_RECURRING_DAY)), _
+        1, _
+        31
+
+    ApplyListValidation _
+        targetSheet.Range( _
+            targetSheet.Cells( _
+                DATA_FIRST_ROW, _
+                COL_RECURRING_HOLIDAY_ADJUSTMENT), _
+            targetSheet.Cells( _
+                lastLayoutRow, _
+                COL_RECURRING_HOLIDAY_ADJUSTMENT)), _
+        Array( _
+            HOLIDAY_ADJUST_PREVIOUS, _
+            HOLIDAY_ADJUST_NEXT, _
+            HOLIDAY_ADJUST_NONE)
+
+    ApplyListValidation _
+        targetSheet.Range( _
+            targetSheet.Cells( _
+                DATA_FIRST_ROW, _
+                COL_RECURRING_PRIORITY), _
+            targetSheet.Cells( _
+                lastLayoutRow, _
+                COL_RECURRING_PRIORITY)), _
+        Array( _
+            PRIORITY_HIGH, _
+            PRIORITY_MEDIUM, _
+            PRIORITY_LOW)
+
+    ApplyExistingDataBorders _
+        targetSheet, _
+        COL_RECURRING_ENABLED, _
+        COL_RECURRING_PRIORITY, _
+        COL_RECURRING_DESCRIPTION
+
+    AddActionButton _
+        targetSheet, _
+        BUTTON_ASSIGN_RECURRING_IDS, _
+        "IDを採番", _
+        "N2", _
+        "P3", _
+        "AssignRecurringTaskIds"
+
+    AddActionButton _
+        targetSheet, _
+        BUTTON_APPLY_RECURRING, _
+        "変更を反映", _
+        "N5", _
+        "P6", _
+        "ApplyRecurringChangesToOpenTodo"
+
+    AddActionButton _
+        targetSheet, _
+        BUTTON_DELETE_RECURRING, _
+        "選択した設定を削除", _
+        "N8", _
+        "P9", _
+        "DeleteSelectedRecurringSetting"
+End Sub
+
+Private Sub SetupHolidaySheet()
+    Dim targetSheet As Worksheet
+    Dim headers As Variant
+    Dim lastLayoutRow As Long
+
+    Set targetSheet = ThisWorkbook.Worksheets(SHEET_HOLIDAY)
+    lastLayoutRow = 370
+    headers = Array("休業日", "備考")
+
+    PrepareVisibleSheet targetSheet, lastLayoutRow, 6
+    SetupTitleBand targetSheet, "休業日", 2, 6
+    SetHeaders targetSheet, headers, COL_HOLIDAY_DATE
+
+    With targetSheet
+        .Columns(COL_HOLIDAY_DATE).ColumnWidth = 14
+        .Columns(COL_HOLIDAY_NOTE).ColumnWidth = 40
+
+        .Range( _
+            .Cells(DATA_FIRST_ROW, COL_HOLIDAY_DATE), _
+            .Cells(lastLayoutRow, COL_HOLIDAY_NOTE)).Interior.Color = _
+            COLOR_WHITE
+
+        .Range( _
+            .Cells(DATA_FIRST_ROW, COL_HOLIDAY_DATE), _
+            .Cells(lastLayoutRow, COL_HOLIDAY_DATE)).NumberFormat = _
+            DATE_DISPLAY_FORMAT
+
+        ResetAutoFilter _
+            targetSheet, _
+            COL_HOLIDAY_DATE, _
+            COL_HOLIDAY_NOTE
+    End With
+
+    ApplyExistingDataBorders _
+        targetSheet, _
+        COL_HOLIDAY_DATE, _
+        COL_HOLIDAY_NOTE, _
+        COL_HOLIDAY_DATE
+End Sub
+
+Private Sub SetupSettingsSheet()
+    Dim targetSheet As Worksheet
+    Dim headers As Variant
+    Dim lastSettingRow As Long
+
+    Set targetSheet = ThisWorkbook.Worksheets(SHEET_SETTINGS)
+    headers = Array("設定項目", "値")
+
+    EnsureSettingValue _
+        SETTING_COMPLETED_RETENTION_DAYS, _
+        DEFAULT_COMPLETED_RETENTION_DAYS
+
+    EnsureSettingValue _
+        SETTING_TODO_MAX, _
+        DEFAULT_TODO_MAX
+
+    EnsureSettingValue _
+        SETTING_DAILY_MAX, _
+        DEFAULT_DAILY_MAX
+
+    EnsureSettingValue _
+        SETTING_RECURRING_MAX, _
+        DEFAULT_RECURRING_MAX
+
+    EnsureSettingValue _
+        SETTING_DATE_DROPDOWN_MONTHS, _
+        DEFAULT_DATE_DROPDOWN_MONTHS
+
+    EnsureSettingValue _
+        SETTING_SATURDAY_IS_HOLIDAY, _
+        IIf(DEFAULT_SATURDAY_IS_HOLIDAY, "はい", "いいえ")
+
+    EnsureSettingValue _
+        SETTING_SUNDAY_IS_HOLIDAY, _
+        IIf(DEFAULT_SUNDAY_IS_HOLIDAY, "はい", "いいえ")
+
+    EnsureSettingValue _
+        SETTING_SHOW_REGISTERED_MESSAGE, _
+        IIf(DEFAULT_SHOW_REGISTERED_MESSAGE, "表示", "非表示")
+
+    EnsureSettingValue _
+        SETTING_COLOR_SCHEME, _
+        DEFAULT_COLOR_SCHEME
+
+    lastSettingRow = GetLastDataRow( _
+        targetSheet, _
+        COL_SETTING_NAME)
+
+    If lastSettingRow < 20 Then
+        lastSettingRow = 20
+    End If
+
+    PrepareVisibleSheet targetSheet, lastSettingRow, 7
+    SetupTitleBand targetSheet, "設定", 2, 7
+    SetHeaders targetSheet, headers, COL_SETTING_NAME
+
+    With targetSheet
+        .Columns(COL_SETTING_NAME).ColumnWidth = 28
+        .Columns(COL_SETTING_VALUE).ColumnWidth = 18
+        .Columns("E:G").ColumnWidth = 11
+
+        .Range( _
+            .Cells(DATA_FIRST_ROW, COL_SETTING_NAME), _
+            .Cells(lastSettingRow, COL_SETTING_VALUE)).Interior.Color = _
+            COLOR_WHITE
+
+        ApplyBorders .Range( _
+            .Cells(DATA_FIRST_ROW, COL_SETTING_NAME), _
+            .Cells(GetLastDataRow( _
+                targetSheet, _
+                COL_SETTING_NAME), _
+                COL_SETTING_VALUE)), _
+            COLOR_BORDER
+    End With
+
+    ApplySettingsValidation targetSheet
+
+    AddActionButton _
+        targetSheet, _
+        BUTTON_REFRESH_SETUP, _
+        "初期設定を更新", _
+        "E2", _
+        "G3", _
+        "RefreshSystemLayout"
+
+    AddActionButton _
+        targetSheet, _
+        BUTTON_CHECK_INTEGRITY, _
+        "全データの整合性確認", _
+        "E5", _
+        "G6", _
+        "CheckAllDataIntegrity"
+End Sub
+
+Private Sub SetupSystemManagementSheet()
+    Dim targetSheet As Worksheet
+    Dim headers As Variant
+
+    Set targetSheet = ThisWorkbook.Worksheets(SHEET_SYSTEM)
+    headers = Array("管理項目", "値")
+
+    PrepareInternalSheet targetSheet, 500, 6
+    SetupTitleBand targetSheet, "システム管理", 2, 6
+    SetHeaders targetSheet, headers, COL_SYSTEM_KEY
+
+    targetSheet.Cells( _
+        HEADER_ROW, _
+        SYSTEM_DATE_LIST_COLUMN).Value = "日付選択肢"
+
+    StyleHeaderRange targetSheet.Range( _
+        targetSheet.Cells( _
+            HEADER_ROW, _
+            SYSTEM_DATE_LIST_COLUMN), _
+        targetSheet.Cells( _
+            HEADER_ROW, _
+            SYSTEM_DATE_LIST_COLUMN))
+
+    targetSheet.Columns(COL_SYSTEM_KEY).ColumnWidth = 24
+    targetSheet.Columns(COL_SYSTEM_VALUE).ColumnWidth = 16
+    targetSheet.Columns(SYSTEM_DATE_LIST_COLUMN).ColumnWidth = 14
+End Sub
+
+Private Sub SetupBackupSheet()
+    Dim targetSheet As Worksheet
+    Dim headers As Variant
+
+    Set targetSheet = ThisWorkbook.Worksheets(SHEET_BACKUP)
+
+    headers = Array( _
+        "処理種別", _
+        "元シート名", _
+        "元行番号", _
+        "処理開始日時", _
+        "元データ")
+
+    PrepareInternalSheet targetSheet, 500, 16
+    SetupTitleBand targetSheet, "一時バックアップ", 2, 16
+    SetHeaders targetSheet, headers, COL_BACKUP_PROCESS_TYPE
+
+    targetSheet.Columns(COL_BACKUP_PROCESS_TYPE).ColumnWidth = 18
+    targetSheet.Columns(COL_BACKUP_SOURCE_SHEET).ColumnWidth = 18
+    targetSheet.Columns(COL_BACKUP_SOURCE_ROW).ColumnWidth = 12
+    targetSheet.Columns(COL_BACKUP_STARTED_AT).ColumnWidth = 20
+    targetSheet.Columns(COL_BACKUP_DATA_FIRST).ColumnWidth = 18
+End Sub
+
+Private Sub RefreshDateChoiceList()
+    Dim systemSheet As Worksheet
+    Dim startDate As Date
+    Dim endDate As Date
+    Dim dayCount As Long
+    Dim dateValues() As Variant
+    Dim index As Long
+    Dim oldLastRow As Long
+    Dim newLastRow As Long
+    Dim refersToText As String
+
+    Set systemSheet = ThisWorkbook.Worksheets(SHEET_SYSTEM)
+
+    startDate = Date
+    endDate = GetDateDropdownEndDate(startDate)
+    dayCount = DateDiff("d", startDate, endDate) + 1
+
+    oldLastRow = GetLastDataRow( _
+        systemSheet, _
+        SYSTEM_DATE_LIST_COLUMN, _
+        DATA_FIRST_ROW)
+
+    If oldLastRow >= DATA_FIRST_ROW Then
+        systemSheet.Range( _
+            systemSheet.Cells( _
+                DATA_FIRST_ROW, _
+                SYSTEM_DATE_LIST_COLUMN), _
+            systemSheet.Cells( _
+                oldLastRow, _
+                SYSTEM_DATE_LIST_COLUMN)).ClearContents
+    End If
+
+    ReDim dateValues(1 To dayCount, 1 To 1)
+
+    For index = 1 To dayCount
+        dateValues(index, 1) = DateAdd( _
+            "d", _
+            index - 1, _
+            startDate)
+    Next index
+
+    newLastRow = DATA_FIRST_ROW + dayCount - 1
+
+    With systemSheet.Range( _
+        systemSheet.Cells( _
+            DATA_FIRST_ROW, _
+            SYSTEM_DATE_LIST_COLUMN), _
+        systemSheet.Cells( _
+            newLastRow, _
+            SYSTEM_DATE_LIST_COLUMN))
+
+        .Value = dateValues
+        .NumberFormat = DATE_DISPLAY_FORMAT
+    End With
+
+    On Error Resume Next
+    ThisWorkbook.Names(TODO_DATE_LIST_NAME).Delete
+    On Error GoTo 0
+
+    refersToText = "='" & _
+        Replace(systemSheet.Name, "'", "''") & _
+        "'!" & _
+        systemSheet.Range( _
+            systemSheet.Cells( _
+                DATA_FIRST_ROW, _
+                SYSTEM_DATE_LIST_COLUMN), _
+            systemSheet.Cells( _
+                newLastRow, _
+                SYSTEM_DATE_LIST_COLUMN)).Address
+
+    ThisWorkbook.Names.Add _
+        Name:=TODO_DATE_LIST_NAME, _
+        RefersTo:=refersToText, _
+        Visible:=False
+End Sub
+
+Private Sub PrepareVisibleSheet( _
+    ByVal targetSheet As Worksheet, _
+    ByVal lastLayoutRow As Long, _
+    ByVal lastLayoutColumn As Long _
+)
+
+    With targetSheet.Range( _
+        targetSheet.Cells(1, 1), _
+        targetSheet.Cells( _
+            lastLayoutRow, _
+            lastLayoutColumn))
+
+        .Interior.Color = COLOR_SHEET_BACKGROUND
+        .Font.Name = UI_FONT_NAME
+        .Font.Color = COLOR_TEXT_NAVY
+        .Font.Size = 11
+    End With
+
+    targetSheet.Rows(TITLE_ROW).RowHeight = 38
+    targetSheet.Rows(HEADER_ROW).RowHeight = 28
+
+    targetSheet.Rows( _
+        DATA_FIRST_ROW & ":" & _
+        lastLayoutRow).RowHeight = 23
+
+    targetSheet.Tab.Color = COLOR_HEADER_TEAL
+End Sub
+
+Private Sub PrepareInternalSheet( _
+    ByVal targetSheet As Worksheet, _
+    ByVal lastLayoutRow As Long, _
+    ByVal lastLayoutColumn As Long _
+)
+
+    With targetSheet.Range( _
+        targetSheet.Cells(1, 1), _
+        targetSheet.Cells( _
+            lastLayoutRow, _
+            lastLayoutColumn))
+
+        .Interior.Color = COLOR_WHITE
+        .Font.Name = UI_FONT_NAME
+        .Font.Color = COLOR_TEXT_NAVY
+        .Font.Size = 10
+    End With
+
+    targetSheet.Rows(TITLE_ROW).RowHeight = 30
+    targetSheet.Rows(HEADER_ROW).RowHeight = 24
+End Sub
+
+Private Sub SetupTitleBand( _
+    ByVal targetSheet As Worksheet, _
+    ByVal titleText As String, _
+    ByVal firstColumn As Long, _
+    ByVal lastColumn As Long _
+)
+
+    Dim titleRange As Range
+
+    Set titleRange = targetSheet.Range( _
+        targetSheet.Cells(TITLE_ROW, firstColumn), _
+        targetSheet.Cells(TITLE_ROW, lastColumn))
+
+    On Error Resume Next
+    titleRange.UnMerge
+    On Error GoTo 0
+
+    titleRange.Merge
+
+    With titleRange
+        .Value = titleText
+        .Interior.Color = COLOR_TITLE_NAVY
+        .Font.Name = UI_FONT_NAME
+        .Font.Color = COLOR_WHITE
+        .Font.Size = 20
+        .Font.Bold = True
+        .HorizontalAlignment = xlLeft
+        .VerticalAlignment = xlCenter
+        .IndentLevel = 1
+    End With
+End Sub
+
+Private Sub SetHeaders( _
+    ByVal targetSheet As Worksheet, _
+    ByVal headers As Variant, _
+    ByVal firstColumn As Long _
+)
+
+    Dim index As Long
+    Dim targetColumn As Long
+    Dim headerRange As Range
+
+    For index = LBound(headers) To UBound(headers)
+        targetColumn = firstColumn + index - LBound(headers)
+
+        targetSheet.Cells( _
+            HEADER_ROW, _
+            targetColumn).Value = headers(index)
+    Next index
+
+    Set headerRange = targetSheet.Range( _
+        targetSheet.Cells( _
+            HEADER_ROW, _
+            firstColumn), _
+        targetSheet.Cells( _
+            HEADER_ROW, _
+            firstColumn + UBound(headers) - LBound(headers)))
+
+    StyleHeaderRange headerRange
+    ApplyBorders headerRange, COLOR_HEADER_TEAL
+End Sub
+
+Private Sub StyleHeaderRange(ByVal targetRange As Range)
+    With targetRange
+        .Interior.Color = COLOR_HEADER_TEAL
+        .Font.Name = UI_FONT_NAME
+        .Font.Color = COLOR_WHITE
+        .Font.Size = 11
+        .Font.Bold = True
+        .HorizontalAlignment = xlCenter
+        .VerticalAlignment = xlCenter
+        .WrapText = True
+    End With
+End Sub
+
+Private Sub ApplyBorders( _
+    ByVal targetRange As Range, _
+    ByVal borderColor As Long _
+)
+
+    Dim borderIndex As Variant
+
+    For Each borderIndex In Array( _
+        xlEdgeLeft, _
+        xlEdgeTop, _
+        xlEdgeBottom, _
+        xlEdgeRight, _
+        xlInsideVertical, _
+        xlInsideHorizontal)
+
+        With targetRange.Borders(borderIndex)
+            .LineStyle = xlContinuous
+            .Color = borderColor
+            .Weight = xlThin
+        End With
+    Next borderIndex
+End Sub
+
+Private Sub ApplyExistingDataBorders( _
+    ByVal targetSheet As Worksheet, _
+    ByVal firstColumn As Long, _
+    ByVal lastColumn As Long, _
+    ByVal keyColumn As Long _
+)
+
+    Dim lastDataRow As Long
+
+    lastDataRow = GetLastDataRow( _
+        targetSheet, _
+        keyColumn, _
+        DATA_FIRST_ROW)
+
+    If lastDataRow < DATA_FIRST_ROW Then Exit Sub
+
+    ApplyBorders _
+        targetSheet.Range( _
+            targetSheet.Cells( _
+                DATA_FIRST_ROW, _
+                firstColumn), _
+            targetSheet.Cells( _
+                lastDataRow, _
+                lastColumn)), _
+        COLOR_BORDER
+End Sub
+
+Private Sub ResetAutoFilter( _
+    ByVal targetSheet As Worksheet, _
+    ByVal firstColumn As Long, _
+    ByVal lastColumn As Long _
+)
+
+    If targetSheet.AutoFilterMode Then
+        targetSheet.AutoFilterMode = False
+    End If
+
+    targetSheet.Range( _
+        targetSheet.Cells( _
+            HEADER_ROW, _
+            firstColumn), _
+        targetSheet.Cells( _
+            HEADER_ROW, _
+            lastColumn)).AutoFilter
+End Sub
+
+Private Sub ApplyDateListValidation(ByVal targetRange As Range)
+    With targetRange.Validation
+        .Delete
+
+        .Add _
+            Type:=xlValidateList, _
+            AlertStyle:=xlValidAlertStop, _
+            Operator:=xlBetween, _
+            Formula1:="=" & TODO_DATE_LIST_NAME
+
+        .IgnoreBlank = True
+        .InCellDropdown = True
+        .ShowInput = True
+        .ShowError = True
+        .ErrorTitle = "日付の入力"
+        .ErrorMessage = _
+            "プルダウンに表示される日付を選択してください。"
+    End With
+End Sub
+
+Private Sub ApplyListValidation( _
+    ByVal targetRange As Range, _
+    ByVal allowedValues As Variant _
+)
+
+    Dim separator As String
+    Dim formulaText As String
+    Dim index As Long
+
+    separator = Application.International(xlListSeparator)
+
+    For index = LBound(allowedValues) To UBound(allowedValues)
+        If Len(formulaText) > 0 Then
+            formulaText = formulaText & separator
+        End If
+
+        formulaText = formulaText & CStr(allowedValues(index))
+    Next index
+
+    With targetRange.Validation
+        .Delete
+
+        .Add _
+            Type:=xlValidateList, _
+            AlertStyle:=xlValidAlertStop, _
+            Operator:=xlBetween, _
+            Formula1:=formulaText
+
+        .IgnoreBlank = True
+        .InCellDropdown = True
+        .ShowInput = True
+        .ShowError = True
+    End With
+End Sub
+
+Private Sub ApplyWholeNumberValidation( _
+    ByVal targetRange As Range, _
+    ByVal minimumValue As Long, _
+    ByVal maximumValue As Long _
+)
+
+    With targetRange.Validation
+        .Delete
+
+        .Add _
+            Type:=xlValidateWholeNumber, _
+            AlertStyle:=xlValidAlertStop, _
+            Operator:=xlBetween, _
+            Formula1:=CStr(minimumValue), _
+            Formula2:=CStr(maximumValue)
+
+        .IgnoreBlank = True
+        .ShowInput = True
+        .ShowError = True
+    End With
+End Sub
+
+Private Sub ApplyMinimumWholeNumberValidation( _
+    ByVal targetRange As Range, _
+    ByVal minimumValue As Long _
+)
+
+    With targetRange.Validation
+        .Delete
+
+        .Add _
+            Type:=xlValidateWholeNumber, _
+            AlertStyle:=xlValidAlertStop, _
+            Operator:=xlGreaterEqual, _
+            Formula1:=CStr(minimumValue)
+
+        .IgnoreBlank = True
+        .ShowInput = True
+        .ShowError = True
+    End With
+End Sub
+
+Private Sub ApplyTodoDateConditionalFormatting( _
+    ByVal targetSheet As Worksheet, _
+    ByVal lastLayoutRow As Long _
+)
+
+    Dim targetRange As Range
+    Dim todayCondition As FormatCondition
+    Dim overdueCondition As FormatCondition
+
+    Set targetRange = targetSheet.Range( _
+        targetSheet.Cells( _
+            DATA_FIRST_ROW, _
+            COL_TODO_DUE), _
+        targetSheet.Cells( _
+            lastLayoutRow, _
+            COL_TODO_DUE))
+
+    targetRange.FormatConditions.Delete
+
+    Set todayCondition = targetRange.FormatConditions.Add( _
+        Type:=xlExpression, _
+        Formula1:="=AND(ISNUMBER(B3),B3=TODAY())")
+
+    todayCondition.Interior.Color = COLOR_INPUT_BACKGROUND
+    todayCondition.Font.Color = COLOR_TODAY_TEXT
+    todayCondition.Font.Bold = True
+
+    Set overdueCondition = targetRange.FormatConditions.Add( _
+        Type:=xlExpression, _
+        Formula1:="=AND(ISNUMBER(B3),B3<TODAY())")
+
+    overdueCondition.Font.Color = COLOR_ERROR_TEXT
+End Sub
+
+Private Sub AddActionButton( _
+    ByVal targetSheet As Worksheet, _
+    ByVal buttonName As String, _
+    ByVal captionText As String, _
+    ByVal topLeftAddress As String, _
+    ByVal bottomRightAddress As String, _
+    ByVal macroName As String _
+)
+
+    Dim buttonArea As Range
+    Dim buttonShape As Shape
+
+    DeleteShapeIfExists targetSheet, buttonName
+
+    Set buttonArea = targetSheet.Range( _
+        topLeftAddress & ":" & bottomRightAddress)
+
+    Set buttonShape = targetSheet.Shapes.AddShape( _
+        msoShapeRoundedRectangle, _
+        buttonArea.Left, _
+        buttonArea.Top, _
+        buttonArea.Width, _
+        buttonArea.Height)
+
+    With buttonShape
+        .Name = buttonName
+        .OnAction = macroName
+        .Placement = xlMoveAndSize
+        .Fill.ForeColor.RGB = COLOR_HEADER_TEAL
+        .Line.Visible = msoFalse
+
+        With .TextFrame
+            .Characters.Text = captionText
+            .HorizontalAlignment = xlHAlignCenter
+            .VerticalAlignment = xlVAlignCenter
+            .Characters.Font.Name = UI_FONT_NAME
+            .Characters.Font.Size = 11
+            .Characters.Font.Bold = True
+            .Characters.Font.Color = COLOR_WHITE
+        End With
+    End With
+End Sub
+
+Private Sub DeleteShapeIfExists( _
+    ByVal targetSheet As Worksheet, _
+    ByVal shapeName As String _
+)
+
+    On Error Resume Next
+    targetSheet.Shapes(shapeName).Delete
+    On Error GoTo 0
+End Sub
+
+Private Sub EnsureSettingValue( _
+    ByVal settingName As String, _
+    ByVal defaultValue As Variant _
+)
+
+    Dim settingsSheet As Worksheet
+    Dim foundCell As Range
+    Dim targetRow As Long
+
+    Set settingsSheet = _
+        ThisWorkbook.Worksheets(SHEET_SETTINGS)
+
+    Set foundCell = settingsSheet.Columns( _
+        COL_SETTING_NAME).Find( _
+            What:=settingName, _
+            After:=settingsSheet.Cells( _
+                1, _
+                COL_SETTING_NAME), _
+            LookIn:=xlValues, _
+            LookAt:=xlWhole, _
+            SearchOrder:=xlByRows, _
+            SearchDirection:=xlNext, _
+            MatchCase:=False)
+
+    If foundCell Is Nothing Then
+        targetRow = GetNextDataRow( _
+            settingsSheet, _
+            COL_SETTING_NAME, _
+            DATA_FIRST_ROW)
+
+        settingsSheet.Cells( _
+            targetRow, _
+            COL_SETTING_NAME).Value = settingName
+
+        settingsSheet.Cells( _
+            targetRow, _
+            COL_SETTING_VALUE).Value = defaultValue
+    End If
+End Sub
+
+Private Sub ApplySettingsValidation( _
+    ByVal settingsSheet As Worksheet _
+)
+
+    Dim targetRow As Long
+
+    targetRow = FindSettingRow( _
+        settingsSheet, _
+        SETTING_COMPLETED_RETENTION_DAYS)
+
+    If targetRow > 0 Then
+        ApplyMinimumWholeNumberValidation _
+            settingsSheet.Cells( _
+                targetRow, _
+                COL_SETTING_VALUE), _
+            0
+    End If
+
+    targetRow = FindSettingRow( _
+        settingsSheet, _
+        SETTING_TODO_MAX)
+
+    If targetRow > 0 Then
+        ApplyWholeNumberValidation _
+            settingsSheet.Cells( _
+                targetRow, _
+                COL_SETTING_VALUE), _
+            1, _
+            ABSOLUTE_TODO_MAX
+    End If
+
+    targetRow = FindSettingRow( _
+        settingsSheet, _
+        SETTING_DAILY_MAX)
+
+    If targetRow > 0 Then
+        ApplyWholeNumberValidation _
+            settingsSheet.Cells( _
+                targetRow, _
+                COL_SETTING_VALUE), _
+            1, _
+            ABSOLUTE_DAILY_MAX
+    End If
+
+    targetRow = FindSettingRow( _
+        settingsSheet, _
+        SETTING_RECURRING_MAX)
+
+    If targetRow > 0 Then
+        ApplyWholeNumberValidation _
+            settingsSheet.Cells( _
+                targetRow, _
+                COL_SETTING_VALUE), _
+            1, _
+            ABSOLUTE_RECURRING_MAX
+    End If
+
+    targetRow = FindSettingRow( _
+        settingsSheet, _
+        SETTING_DATE_DROPDOWN_MONTHS)
+
+    If targetRow > 0 Then
+        ApplyMinimumWholeNumberValidation _
+            settingsSheet.Cells( _
+                targetRow, _
+                COL_SETTING_VALUE), _
+            1
+    End If
+
+    targetRow = FindSettingRow( _
+        settingsSheet, _
+        SETTING_SATURDAY_IS_HOLIDAY)
+
+    If targetRow > 0 Then
+        ApplyListValidation _
+            settingsSheet.Cells( _
+                targetRow, _
+                COL_SETTING_VALUE), _
+            Array("はい", "いいえ")
+    End If
+
+    targetRow = FindSettingRow( _
+        settingsSheet, _
+        SETTING_SUNDAY_IS_HOLIDAY)
+
+    If targetRow > 0 Then
+        ApplyListValidation _
+            settingsSheet.Cells( _
+                targetRow, _
+                COL_SETTING_VALUE), _
+            Array("はい", "いいえ")
+    End If
+
+    targetRow = FindSettingRow( _
+        settingsSheet, _
+        SETTING_SHOW_REGISTERED_MESSAGE)
+
+    If targetRow > 0 Then
+        ApplyListValidation _
+            settingsSheet.Cells( _
+                targetRow, _
+                COL_SETTING_VALUE), _
+            Array("表示", "非表示")
+    End If
+End Sub
+
+Private Function FindSettingRow( _
+    ByVal settingsSheet As Worksheet, _
+    ByVal settingName As String _
+) As Long
+
+    Dim foundCell As Range
+
+    Set foundCell = settingsSheet.Columns( _
+        COL_SETTING_NAME).Find( _
+            What:=settingName, _
+            After:=settingsSheet.Cells( _
+                1, _
+                COL_SETTING_NAME), _
+            LookIn:=xlValues, _
+            LookAt:=xlWhole, _
+            SearchOrder:=xlByRows, _
+            SearchDirection:=xlNext, _
+            MatchCase:=False)
+
+    If Not foundCell Is Nothing Then
+        FindSettingRow = foundCell.Row
+    End If
+End Function
+
+Private Sub RebuildDailyUseCheckboxes()
+    RebuildUseCheckboxes _
+        ThisWorkbook.Worksheets(SHEET_DAILY), _
+        CHECKBOX_DAILY_PREFIX, _
+        COL_DAILY_ENABLED, _
+        DATA_FIRST_ROW + ABSOLUTE_DAILY_MAX - 1, _
+        "HandleDailySettingChange"
+End Sub
+
+Private Sub RebuildRecurringUseCheckboxes()
+    RebuildUseCheckboxes _
+        ThisWorkbook.Worksheets(SHEET_RECURRING), _
+        CHECKBOX_RECURRING_PREFIX, _
+        COL_RECURRING_ENABLED, _
+        DATA_FIRST_ROW + ABSOLUTE_RECURRING_MAX - 1, _
+        "HandleRecurringSettingChange"
+End Sub
+
+Private Sub RebuildUseCheckboxes( _
+    ByVal targetSheet As Worksheet, _
+    ByVal checkboxPrefix As String, _
+    ByVal linkedColumn As Long, _
+    ByVal lastRow As Long, _
+    ByVal macroName As String _
+)
+
+    Dim shapeIndex As Long
+    Dim rowNumber As Long
+    Dim linkedCell As Range
+    Dim newCheckbox As CheckBox
+    Dim isEnabled As Boolean
+    Dim checkboxSize As Double
+
+    For shapeIndex = targetSheet.Shapes.Count To 1 Step -1
+        If Left$( _
+            targetSheet.Shapes(shapeIndex).Name, _
+            Len(checkboxPrefix)) = checkboxPrefix Then
+
+            targetSheet.Shapes(shapeIndex).Delete
+        End If
+    Next shapeIndex
+
+    checkboxSize = 14
+
+    For rowNumber = DATA_FIRST_ROW To lastRow
+        Set linkedCell = targetSheet.Cells( _
+            rowNumber, _
+            linkedColumn)
+
+        isEnabled = CellValueIsEnabled(linkedCell.Value)
+        linkedCell.Value = isEnabled
+        linkedCell.NumberFormat = ";;;"
+
+        Set newCheckbox = targetSheet.CheckBoxes.Add( _
+            linkedCell.Left + _
+                (linkedCell.Width - checkboxSize) / 2, _
+            linkedCell.Top + _
+                (linkedCell.Height - checkboxSize) / 2, _
+            checkboxSize, _
+            checkboxSize)
+
+        With newCheckbox
+            .Name = checkboxPrefix & CStr(rowNumber)
+            .Caption = vbNullString
+
+            .LinkedCell = "'" & _
+                Replace(targetSheet.Name, "'", "''") & _
+                "'!" & linkedCell.Address
+
+            .OnAction = macroName
+            .Placement = xlMoveAndSize
+            .PrintObject = False
+
+            If isEnabled Then
+                .Value = xlOn
+            Else
+                .Value = xlOff
+            End If
+        End With
+    Next rowNumber
+End Sub
+
+Private Function CellValueIsEnabled( _
+    ByVal targetValue As Variant _
+) As Boolean
+
+    Dim normalizedValue As String
+
+    If IsError(targetValue) Or IsEmpty(targetValue) Then
+        Exit Function
+    End If
+
+    If VarType(targetValue) = vbBoolean Then
+        CellValueIsEnabled = CBool(targetValue)
+        Exit Function
+    End If
+
+    normalizedValue = UCase$(Trim$(CStr(targetValue)))
+
+    CellValueIsEnabled = _
+        (normalizedValue = "TRUE" _
+        Or normalizedValue = "はい" _
+        Or normalizedValue = "1")
+End Function
+
+Private Sub SetupVisibleSheetWindows()
+    Dim sheetNames As Variant
+    Dim sheetNameValue As Variant
+    Dim targetSheet As Worksheet
+
+    If ThisWorkbook.Windows.Count = 0 Then Exit Sub
+
+    sheetNames = Array( _
+        SHEET_TODO_ADD, _
+        SHEET_TODO_LIST, _
+        SHEET_COMPLETED, _
+        SHEET_DAILY, _
+        SHEET_RECURRING, _
+        SHEET_HOLIDAY, _
+        SHEET_SETTINGS)
+
+    For Each sheetNameValue In sheetNames
+        Set targetSheet = _
+            ThisWorkbook.Worksheets(CStr(sheetNameValue))
+
+        targetSheet.Activate
+        ActiveWindow.DisplayGridlines = False
+        ActiveWindow.FreezePanes = False
+        ActiveWindow.SplitColumn = 0
+        ActiveWindow.SplitRow = HEADER_ROW
+        ActiveWindow.FreezePanes = True
+    Next sheetNameValue
+End Sub
