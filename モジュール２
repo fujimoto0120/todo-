@@ -1,0 +1,827 @@
+Option Explicit
+
+' 共通で使う小さな処理をここにまとめる
+
+Public Sub CaptureExcelState(ByRef savedState As TExcelState)
+    With Application
+        savedState.ScreenUpdating = .ScreenUpdating
+        savedState.EnableEvents = .EnableEvents
+        savedState.Calculation = .Calculation
+        savedState.DisplayAlerts = .DisplayAlerts
+    End With
+End Sub
+
+Public Sub RestoreExcelState(ByRef savedState As TExcelState)
+    On Error Resume Next
+
+    With Application
+        .ScreenUpdating = savedState.ScreenUpdating
+        .EnableEvents = savedState.EnableEvents
+        .Calculation = savedState.Calculation
+        .DisplayAlerts = savedState.DisplayAlerts
+    End With
+
+    On Error GoTo 0
+End Sub
+
+Public Function WorksheetExists(ByVal sheetName As String) As Boolean
+    Dim targetSheet As Object
+
+    On Error Resume Next
+    Set targetSheet = ThisWorkbook.Worksheets(sheetName)
+    On Error GoTo 0
+
+    WorksheetExists = Not targetSheet Is Nothing
+End Function
+
+Public Function GetLastDataRow( _
+    ByVal targetSheet As Worksheet, _
+    Optional ByVal keyColumn As Long = 0, _
+    Optional ByVal firstDataRow As Long = DATA_FIRST_ROW _
+) As Long
+
+    Dim foundCell As Range
+    Dim lastRow As Long
+
+    If keyColumn > 0 Then
+        lastRow = targetSheet.Cells( _
+            targetSheet.Rows.Count, keyColumn).End(xlUp).Row
+    Else
+        Set foundCell = targetSheet.Cells.Find( _
+            What:="*", _
+            After:=targetSheet.Cells(1, 1), _
+            LookIn:=xlFormulas, _
+            LookAt:=xlPart, _
+            SearchOrder:=xlByRows, _
+            SearchDirection:=xlPrevious, _
+            MatchCase:=False)
+
+        If foundCell Is Nothing Then
+            lastRow = firstDataRow - 1
+        Else
+            lastRow = foundCell.Row
+        End If
+    End If
+
+    If lastRow < firstDataRow Then
+        GetLastDataRow = firstDataRow - 1
+    Else
+        GetLastDataRow = lastRow
+    End If
+End Function
+
+Public Function GetNextDataRow( _
+    ByVal targetSheet As Worksheet, _
+    Optional ByVal keyColumn As Long = 0, _
+    Optional ByVal firstDataRow As Long = DATA_FIRST_ROW _
+) As Long
+
+    Dim lastRow As Long
+
+    lastRow = GetLastDataRow( _
+        targetSheet, keyColumn, firstDataRow)
+
+    If lastRow < firstDataRow Then
+        GetNextDataRow = firstDataRow
+    Else
+        GetNextDataRow = lastRow + 1
+    End If
+End Function
+
+Public Function GetSafeCellValue( _
+    ByVal targetCell As Range _
+) As Variant
+
+    If targetCell Is Nothing Then
+        GetSafeCellValue = Empty
+    ElseIf IsError(targetCell.Value) Then
+        GetSafeCellValue = Empty
+    Else
+        GetSafeCellValue = targetCell.Value
+    End If
+End Function
+
+Public Function IsValidExcelDate( _
+    ByVal targetValue As Variant _
+) As Boolean
+
+    Dim convertedDate As Date
+
+    If IsError(targetValue) Then Exit Function
+    If IsEmpty(targetValue) Then Exit Function
+    If VarType(targetValue) = vbBoolean Then Exit Function
+    If Len(Trim$(CStr(targetValue))) = 0 Then Exit Function
+    If Not IsDate(targetValue) Then Exit Function
+
+    On Error GoTo InvalidDate
+
+    convertedDate = CDate(targetValue)
+
+    If Year(convertedDate) < 1900 Then Exit Function
+    If Year(convertedDate) > 9999 Then Exit Function
+
+    IsValidExcelDate = True
+    Exit Function
+
+InvalidDate:
+    IsValidExcelDate = False
+End Function
+
+Public Function DateOnlyValue( _
+    ByVal targetValue As Variant _
+) As Date
+
+    If Not IsValidExcelDate(targetValue) Then
+        Err.Raise _
+            vbObjectError + 1000, _
+            "DateOnlyValue", _
+            "日付として認識できない値です。"
+    End If
+
+    DateOnlyValue = DateValue(CDate(targetValue))
+End Function
+
+Public Function GetSettingLong( _
+    ByVal settingName As String, _
+    ByVal defaultValue As Long, _
+    Optional ByVal minimumValue As Long = 0, _
+    Optional ByVal maximumValue As Long = 0, _
+    Optional ByVal showWarning As Boolean = True _
+) As Long
+
+    Dim rawValue As Variant
+    Dim settingFound As Boolean
+    Dim numericValue As Double
+    Dim isValid As Boolean
+
+    rawValue = GetSettingRawValue( _
+        settingName, settingFound)
+
+    If settingFound _
+        And Not IsError(rawValue) _
+        And IsNumeric(rawValue) Then
+
+        numericValue = CDbl(rawValue)
+        isValid = (numericValue = Fix(numericValue))
+
+        If isValid _
+            And numericValue >= -2147483648# _
+            And numericValue <= 2147483647# Then
+
+            If numericValue < minimumValue Then
+                isValid = False
+            End If
+
+            If maximumValue > 0 _
+                And numericValue > maximumValue Then
+
+                isValid = False
+            End If
+        Else
+            isValid = False
+        End If
+    End If
+
+    If isValid Then
+        GetSettingLong = CLng(numericValue)
+    Else
+        GetSettingLong = defaultValue
+
+        If settingFound And showWarning Then
+            ShowInvalidSettingWarning _
+                settingName, CStr(defaultValue)
+        End If
+    End If
+End Function
+
+Public Function GetSettingBoolean( _
+    ByVal settingName As String, _
+    ByVal defaultValue As Boolean, _
+    Optional ByVal showWarning As Boolean = True _
+) As Boolean
+
+    Dim rawValue As Variant
+    Dim settingFound As Boolean
+    Dim normalizedValue As String
+    Dim isValid As Boolean
+
+    rawValue = GetSettingRawValue( _
+        settingName, settingFound)
+
+    If settingFound And Not IsError(rawValue) Then
+        If VarType(rawValue) = vbBoolean Then
+            GetSettingBoolean = CBool(rawValue)
+            Exit Function
+        End If
+
+        normalizedValue = UCase$(Trim$(CStr(rawValue)))
+
+        Select Case normalizedValue
+            Case "はい", "TRUE", "1", "表示"
+                GetSettingBoolean = True
+                isValid = True
+
+            Case "いいえ", "FALSE", "0", "非表示"
+                GetSettingBoolean = False
+                isValid = True
+        End Select
+    End If
+
+    If Not isValid Then
+        GetSettingBoolean = defaultValue
+
+        If settingFound And showWarning Then
+            ShowInvalidSettingWarning _
+                settingName, _
+                IIf(defaultValue, "はい", "いいえ")
+        End If
+    End If
+End Function
+
+Public Function GetSettingText( _
+    ByVal settingName As String, _
+    ByVal defaultValue As String, _
+    Optional ByVal showWarning As Boolean = True _
+) As String
+
+    Dim rawValue As Variant
+    Dim settingFound As Boolean
+    Dim normalizedValue As String
+
+    rawValue = GetSettingRawValue( _
+        settingName, settingFound)
+
+    If settingFound And Not IsError(rawValue) Then
+        normalizedValue = Trim$(CStr(rawValue))
+    End If
+
+    If Len(normalizedValue) > 0 Then
+        GetSettingText = normalizedValue
+    Else
+        GetSettingText = defaultValue
+
+        If settingFound And showWarning Then
+            ShowInvalidSettingWarning _
+                settingName, defaultValue
+        End If
+    End If
+End Function
+
+Public Function GetDateDropdownEndDate( _
+    ByVal startDate As Date _
+) As Date
+
+    Dim monthCount As Long
+
+    monthCount = GetSettingLong( _
+        SETTING_DATE_DROPDOWN_MONTHS, _
+        DEFAULT_DATE_DROPDOWN_MONTHS, _
+        1)
+
+    On Error GoTo DateError
+
+    GetDateDropdownEndDate = DateAdd( _
+        "m", monthCount, DateValue(startDate))
+
+    Exit Function
+
+DateError:
+    Err.Raise _
+        vbObjectError + 1001, _
+        "GetDateDropdownEndDate", _
+        "日付プルダウンの終了日を計算できません。"
+End Function
+
+Public Function GetPrioritySortValue( _
+    ByVal priorityValue As Variant _
+) As Long
+
+    Dim normalizedValue As String
+
+    If IsError(priorityValue) _
+        Or IsEmpty(priorityValue) Then
+
+        GetPrioritySortValue = PRIORITY_SORT_BLANK
+        Exit Function
+    End If
+
+    normalizedValue = Trim$(CStr(priorityValue))
+
+    Select Case normalizedValue
+        Case PRIORITY_HIGH
+            GetPrioritySortValue = PRIORITY_SORT_HIGH
+
+        Case PRIORITY_MEDIUM
+            GetPrioritySortValue = PRIORITY_SORT_MEDIUM
+
+        Case PRIORITY_LOW
+            GetPrioritySortValue = PRIORITY_SORT_LOW
+
+        Case vbNullString
+            GetPrioritySortValue = PRIORITY_SORT_BLANK
+
+        Case Else
+            GetPrioritySortValue = PRIORITY_SORT_INVALID
+    End Select
+End Function
+
+Public Function GetTodoDataCount() As Long
+    Dim targetSheet As Worksheet
+    Dim lastRow As Long
+    Dim rowNumber As Long
+
+    If Not WorksheetExists(SHEET_TODO_LIST) Then
+        Exit Function
+    End If
+
+    Set targetSheet = _
+        ThisWorkbook.Worksheets(SHEET_TODO_LIST)
+
+    lastRow = GetLastDataRow(targetSheet)
+
+    For rowNumber = DATA_FIRST_ROW To lastRow
+        If Application.CountA( _
+            targetSheet.Range( _
+                targetSheet.Cells( _
+                    rowNumber, COL_TODO_FIRST), _
+                targetSheet.Cells( _
+                    rowNumber, COL_TODO_LAST))) > 0 Then
+
+            GetTodoDataCount = _
+                GetTodoDataCount + 1
+        End If
+    Next rowNumber
+End Function
+
+Public Function CanAddTodoRows( _
+    ByVal requiredCount As Long, _
+    Optional ByVal showWarning As Boolean = True _
+) As Boolean
+
+    Dim todoLimit As Long
+    Dim currentCount As Long
+
+    If requiredCount <= 0 Then
+        CanAddTodoRows = True
+        Exit Function
+    End If
+
+    If Not WorksheetExists(SHEET_TODO_LIST) Then
+        If showWarning Then
+            MsgBox _
+                MSG_SETUP_REQUIRED, _
+                vbExclamation, _
+                APP_TITLE
+        End If
+
+        Exit Function
+    End If
+
+    todoLimit = GetSettingLong( _
+        SETTING_TODO_MAX, _
+        DEFAULT_TODO_MAX, _
+        1, _
+        ABSOLUTE_TODO_MAX)
+
+    currentCount = GetTodoDataCount()
+
+    CanAddTodoRows = _
+        (currentCount + requiredCount <= todoLimit)
+
+    If Not CanAddTodoRows And showWarning Then
+        MsgBox _
+            MSG_TODO_LIMIT_REACHED & vbCrLf & _
+            "現在：" & CStr(currentCount) & "件" & vbCrLf & _
+            "上限：" & CStr(todoLimit) & "件", _
+            vbExclamation, _
+            APP_TITLE
+    End If
+End Function
+
+Public Function FindDailySettingRow( _
+    ByVal taskId As String _
+) As Long
+
+    FindDailySettingRow = FindIdRow( _
+        SHEET_DAILY, _
+        COL_DAILY_ID, _
+        taskId)
+End Function
+
+Public Function FindRecurringSettingRow( _
+    ByVal taskId As String _
+) As Long
+
+    FindRecurringSettingRow = FindIdRow( _
+        SHEET_RECURRING, _
+        COL_RECURRING_ID, _
+        taskId)
+End Function
+
+Public Function GenerateNextId( _
+    ByVal idPrefix As String, _
+    ByVal sourceSheetName As String, _
+    ByVal idColumn As Long, _
+    ByVal counterKey As String _
+) As String
+
+    Dim savedNextNumber As Long
+    Dim existingMaxNumber As Long
+    Dim nextNumber As Long
+
+    If Not WorksheetExists(SHEET_SYSTEM) Then
+        Err.Raise _
+            vbObjectError + 1002, _
+            "GenerateNextId", _
+            "システム管理シートがありません。"
+    End If
+
+    If Not WorksheetExists(sourceSheetName) Then
+        Err.Raise _
+            vbObjectError + 1003, _
+            "GenerateNextId", _
+            sourceSheetName & "シートがありません。"
+    End If
+
+    If idPrefix <> DAILY_ID_PREFIX _
+        And idPrefix <> RECURRING_ID_PREFIX Then
+
+        Err.Raise _
+            vbObjectError + 1004, _
+            "GenerateNextId", _
+            "IDの接頭文字が不正です。"
+    End If
+
+    savedNextNumber = _
+        GetSavedNextIdNumber(counterKey)
+
+    existingMaxNumber = GetExistingMaxIdNumber( _
+        sourceSheetName, _
+        idColumn, _
+        idPrefix)
+
+    nextNumber = savedNextNumber
+
+    If nextNumber < existingMaxNumber + 1 Then
+        nextNumber = existingMaxNumber + 1
+    End If
+
+    If nextNumber < 1 Then
+        nextNumber = 1
+    End If
+
+    If nextNumber > ID_NUMBER_MAX Then
+        Err.Raise _
+            vbObjectError + 1005, _
+            "GenerateNextId", _
+            "業務IDが上限に達しました。"
+    End If
+
+    SaveNextIdNumber _
+        counterKey, nextNumber + 1
+
+    GenerateNextId = _
+        idPrefix & _
+        Format$( _
+            nextNumber, _
+            String$(ID_NUMBER_DIGITS, "0"))
+End Function
+
+Public Function IsDuplicateTask( _
+    ByVal taskType As String, _
+    ByVal taskId As String, _
+    ByVal originalDate As Date, _
+    Optional ByVal ignoreSheetName As String = vbNullString, _
+    Optional ByVal ignoreRow As Long = 0 _
+) As Boolean
+
+    Dim targetSheetNames As Variant
+    Dim sheetNameValue As Variant
+    Dim targetSheet As Worksheet
+    Dim lastRow As Long
+    Dim rowNumber As Long
+    Dim storedDate As Variant
+
+    If Len(Trim$(taskType)) = 0 Then
+        Exit Function
+    End If
+
+    If Len(Trim$(taskId)) = 0 Then
+        Exit Function
+    End If
+
+    targetSheetNames = Array( _
+        SHEET_TODO_LIST, _
+        SHEET_COMPLETED)
+
+    For Each sheetNameValue In targetSheetNames
+        If WorksheetExists(CStr(sheetNameValue)) Then
+            Set targetSheet = _
+                ThisWorkbook.Worksheets( _
+                    CStr(sheetNameValue))
+
+            lastRow = GetLastDataRow(targetSheet)
+
+            For rowNumber = DATA_FIRST_ROW To lastRow
+                If Not ( _
+                    CStr(sheetNameValue) = ignoreSheetName _
+                    And rowNumber = ignoreRow) Then
+
+                    If Trim$(CStr(GetSafeCellValue( _
+                        targetSheet.Cells( _
+                            rowNumber, _
+                            COL_TODO_TASK_TYPE)))) = taskType _
+                    And Trim$(CStr(GetSafeCellValue( _
+                        targetSheet.Cells( _
+                            rowNumber, _
+                            COL_TODO_TASK_ID)))) = taskId Then
+
+                        storedDate = GetSafeCellValue( _
+                            targetSheet.Cells( _
+                                rowNumber, _
+                                COL_TODO_ORIGINAL_DATE))
+
+                        If IsValidExcelDate(storedDate) Then
+                            If DateOnlyValue(storedDate) = _
+                                DateValue(originalDate) Then
+
+                                IsDuplicateTask = True
+                                Exit Function
+                            End If
+                        End If
+                    End If
+                End If
+            Next rowNumber
+        End If
+    Next sheetNameValue
+End Function
+
+Public Sub ShowProcessError( _
+    ByVal processName As String, _
+    Optional ByVal sheetName As String = vbNullString, _
+    Optional ByVal rowNumber As Long = 0, _
+    Optional ByVal taskId As String = vbNullString, _
+    Optional ByVal errorDescription As String = vbNullString _
+)
+
+    Dim messageText As String
+
+    messageText = _
+        "処理中にエラーが発生しました。" & vbCrLf & _
+        "処理：" & processName
+
+    If Len(sheetName) > 0 Then
+        messageText = messageText & vbCrLf & _
+            "シート：" & sheetName
+    End If
+
+    If rowNumber > 0 Then
+        messageText = messageText & vbCrLf & _
+            "行：" & CStr(rowNumber)
+    End If
+
+    If Len(taskId) > 0 Then
+        messageText = messageText & vbCrLf & _
+            "業務ID：" & taskId
+    End If
+
+    If Len(errorDescription) > 0 Then
+        messageText = messageText & vbCrLf & _
+            "内容：" & errorDescription
+    End If
+
+    MsgBox _
+        messageText, _
+        vbExclamation, _
+        APP_TITLE
+End Sub
+
+Private Function GetSettingRawValue( _
+    ByVal settingName As String, _
+    ByRef settingFound As Boolean _
+) As Variant
+
+    Dim settingsSheet As Worksheet
+    Dim foundCell As Range
+
+    settingFound = False
+
+    If Not WorksheetExists(SHEET_SETTINGS) Then
+        GetSettingRawValue = Empty
+        Exit Function
+    End If
+
+    Set settingsSheet = _
+        ThisWorkbook.Worksheets(SHEET_SETTINGS)
+
+    Set foundCell = _
+        settingsSheet.Columns( _
+            COL_SETTING_NAME).Find( _
+                What:=settingName, _
+                After:=settingsSheet.Cells( _
+                    1, COL_SETTING_NAME), _
+                LookIn:=xlValues, _
+                LookAt:=xlWhole, _
+                SearchOrder:=xlByRows, _
+                SearchDirection:=xlNext, _
+                MatchCase:=False)
+
+    If foundCell Is Nothing Then
+        GetSettingRawValue = Empty
+    Else
+        settingFound = True
+
+        GetSettingRawValue = _
+            settingsSheet.Cells( _
+                foundCell.Row, _
+                COL_SETTING_VALUE).Value
+    End If
+End Function
+
+Private Sub ShowInvalidSettingWarning( _
+    ByVal settingName As String, _
+    ByVal defaultText As String _
+)
+
+    MsgBox _
+        MSG_INVALID_SETTING_PREFIX & vbCrLf & _
+        "項目：" & settingName & vbCrLf & _
+        "使用する値：" & defaultText, _
+        vbExclamation, _
+        APP_TITLE
+End Sub
+
+Private Function FindIdRow( _
+    ByVal sheetName As String, _
+    ByVal idColumn As Long, _
+    ByVal taskId As String _
+) As Long
+
+    Dim targetSheet As Worksheet
+    Dim foundCell As Range
+
+    If Len(Trim$(taskId)) = 0 Then
+        Exit Function
+    End If
+
+    If Not WorksheetExists(sheetName) Then
+        Exit Function
+    End If
+
+    Set targetSheet = _
+        ThisWorkbook.Worksheets(sheetName)
+
+    Set foundCell = _
+        targetSheet.Columns(idColumn).Find( _
+            What:=taskId, _
+            After:=targetSheet.Cells( _
+                HEADER_ROW, idColumn), _
+            LookIn:=xlValues, _
+            LookAt:=xlWhole, _
+            SearchOrder:=xlByRows, _
+            SearchDirection:=xlNext, _
+            MatchCase:=False)
+
+    If Not foundCell Is Nothing Then
+        If foundCell.Row >= DATA_FIRST_ROW Then
+            FindIdRow = foundCell.Row
+        End If
+    End If
+End Function
+
+Private Function GetExistingMaxIdNumber( _
+    ByVal sheetName As String, _
+    ByVal idColumn As Long, _
+    ByVal idPrefix As String _
+) As Long
+
+    Dim targetSheet As Worksheet
+    Dim lastRow As Long
+    Dim rowNumber As Long
+    Dim idValue As String
+    Dim numberPart As String
+    Dim currentNumber As Long
+
+    Set targetSheet = _
+        ThisWorkbook.Worksheets(sheetName)
+
+    lastRow = GetLastDataRow( _
+        targetSheet, idColumn)
+
+    For rowNumber = DATA_FIRST_ROW To lastRow
+        idValue = Trim$(CStr(GetSafeCellValue( _
+            targetSheet.Cells( _
+                rowNumber, idColumn))))
+
+        If Len(idValue) = _
+            Len(idPrefix) + ID_NUMBER_DIGITS Then
+
+            If Left$(idValue, Len(idPrefix)) = _
+                idPrefix Then
+
+                numberPart = Mid$( _
+                    idValue, _
+                    Len(idPrefix) + 1)
+
+                If numberPart Like _
+                    String$(ID_NUMBER_DIGITS, "#") Then
+
+                    currentNumber = CLng(numberPart)
+
+                    If currentNumber > _
+                        GetExistingMaxIdNumber Then
+
+                        GetExistingMaxIdNumber = _
+                            currentNumber
+                    End If
+                End If
+            End If
+        End If
+    Next rowNumber
+End Function
+
+Private Function GetSavedNextIdNumber( _
+    ByVal counterKey As String _
+) As Long
+
+    Dim systemSheet As Worksheet
+    Dim foundCell As Range
+    Dim rawValue As Variant
+
+    GetSavedNextIdNumber = 1
+
+    Set systemSheet = _
+        ThisWorkbook.Worksheets(SHEET_SYSTEM)
+
+    Set foundCell = _
+        systemSheet.Columns(COL_SYSTEM_KEY).Find( _
+            What:=counterKey, _
+            After:=systemSheet.Cells( _
+                1, COL_SYSTEM_KEY), _
+            LookIn:=xlValues, _
+            LookAt:=xlWhole, _
+            SearchOrder:=xlByRows, _
+            SearchDirection:=xlNext, _
+            MatchCase:=False)
+
+    If foundCell Is Nothing Then
+        Exit Function
+    End If
+
+    rawValue = systemSheet.Cells( _
+        foundCell.Row, _
+        COL_SYSTEM_VALUE).Value
+
+    If IsNumeric(rawValue) Then
+        If CDbl(rawValue) = Fix(CDbl(rawValue)) Then
+            If CDbl(rawValue) >= 1 _
+                And CDbl(rawValue) <= _
+                    ID_NUMBER_MAX + 1# Then
+
+                GetSavedNextIdNumber = _
+                    CLng(rawValue)
+            End If
+        End If
+    End If
+End Function
+
+Private Sub SaveNextIdNumber( _
+    ByVal counterKey As String, _
+    ByVal nextNumber As Long _
+)
+
+    Dim systemSheet As Worksheet
+    Dim foundCell As Range
+    Dim targetRow As Long
+
+    Set systemSheet = _
+        ThisWorkbook.Worksheets(SHEET_SYSTEM)
+
+    Set foundCell = _
+        systemSheet.Columns(COL_SYSTEM_KEY).Find( _
+            What:=counterKey, _
+            After:=systemSheet.Cells( _
+                1, COL_SYSTEM_KEY), _
+            LookIn:=xlValues, _
+            LookAt:=xlWhole, _
+            SearchOrder:=xlByRows, _
+            SearchDirection:=xlNext, _
+            MatchCase:=False)
+
+    If foundCell Is Nothing Then
+        targetRow = GetNextDataRow( _
+            systemSheet, _
+            COL_SYSTEM_KEY, _
+            DATA_FIRST_ROW)
+
+        systemSheet.Cells( _
+            targetRow, _
+            COL_SYSTEM_KEY).Value = counterKey
+    Else
+        targetRow = foundCell.Row
+    End If
+
+    systemSheet.Cells( _
+        targetRow, _
+        COL_SYSTEM_VALUE).Value = nextNumber
+End Sub
