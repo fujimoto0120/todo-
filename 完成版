@@ -2200,7 +2200,7 @@ Private Sub ApplyDateListValidation(ByVal targetRange As Range)
         .ShowInput = True
         .ShowError = True
         .ErrorTitle = "日付の入力"
-        .errorMessage = _
+        .ErrorMessage = _
             "プルダウンに表示される日付を選択してください。"
     End With
 End Sub
@@ -7189,5 +7189,3 @@ Private Sub ApplyDailyChangesForManualMode()
         HandleDailySheetChange changedRange
     Next rowNumber
 End Sub
-
-
