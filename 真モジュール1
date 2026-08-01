@@ -1,0 +1,1826 @@
+Option Explicit
+
+Private Const S_TODO As String = "ToDo"
+Private Const S_ENTRY As String = "登録"
+Private Const S_HISTORY As String = "完了履歴"
+Private Const S_SETTINGS As String = "設定"
+Private Const T_TODO As String = "tblTodo"
+Private Const T_HISTORY As String = "tblHistory"
+
+Private Const C_DONE As Long = 1
+Private Const C_PRIORITY As Long = 2
+Private Const C_SELF_DUE As Long = 3
+Private Const C_ACTUAL_DUE As Long = 4
+Private Const C_NUMBER As Long = 5
+Private Const C_TASK As Long = 6
+Private Const C_STATUS As Long = 7
+Private Const C_CATEGORY As Long = 8
+Private Const C_REPEAT As Long = 9
+Private Const C_TASK_ID As Long = 10
+Private Const C_SERIES_ID As Long = 11
+Private Const C_CREATED As Long = 12
+Private Const C_MEMO As Long = 13
+Private Const C_INTERVAL As Long = 14
+Private Const C_BASE As Long = 15
+Private Const C_WEEKDAY As Long = 16
+Private Const C_DAY As Long = 17
+Private Const C_ORDINAL As Long = 18
+Private Const C_END_DATE As Long = 19
+Private Const C_DUE_OFFSET As Long = 20
+
+Private Const REC_NONE As String = "なし"
+Private Const REC_DAILY As String = "毎日"
+Private Const REC_WEEKDAY As String = "平日"
+Private Const REC_WEEKLY As String = "毎週"
+Private Const REC_MONTH_DAY As String = "毎月（日付）"
+Private Const REC_MONTH_ORDINAL As String = "毎月（第○曜日）"
+Private Const REC_MONTH_END As String = "月末"
+Private Const REC_BUSINESS_MONTH_END As String = "月末営業日"
+
+Private mIdSequence As Long
+
+'============================================================
+' 初期設定
+'============================================================
+Public Sub InitialSetup()
+    Dim answer As VbMsgBoxResult
+
+    If TargetSheetExists Then
+        answer = MsgBox( _
+            "ToDo用シートがすでにあります。" & vbCrLf & _
+            "続けると同名シートのデータは消去されます。続けますか？", _
+            vbExclamation + vbYesNo, "初期設定")
+
+        If answer <> vbYes Then Exit Sub
+    End If
+
+    On Error GoTo ErrorHandler
+
+    Application.ScreenUpdating = False
+    Application.EnableEvents = False
+    Application.DisplayAlerts = False
+
+    BuildSettingsSheet ResetSheet(S_SETTINGS)
+    BuildTodoSheet ResetSheet(S_TODO)
+    BuildEntrySheet ResetSheet(S_ENTRY)
+    BuildHistorySheet ResetSheet(S_HISTORY)
+
+    ApplyValidations
+
+    ThisWorkbook.Worksheets(S_TODO).Activate
+    SortTasks False
+
+    Application.DisplayAlerts = True
+    Application.EnableEvents = True
+    Application.ScreenUpdating = True
+
+    MsgBox "初期設定が完了しました。" & vbCrLf & _
+           "「登録」シートからタスクを登録してください。", vbInformation
+    Exit Sub
+
+ErrorHandler:
+    Application.DisplayAlerts = True
+    Application.EnableEvents = True
+    Application.ScreenUpdating = True
+
+    MsgBox "初期設定中にエラーが発生しました。" & vbCrLf & _
+           Err.Description, vbExclamation
+End Sub
+
+Public Sub InitializeOnOpen()
+    On Error Resume Next
+
+    ApplyValidations
+    EnsureBlankRow TodoTable
+    EnsureBlankRow HistoryTable
+    SortTasks False
+
+    If ToBoolean(ThisWorkbook.Worksheets(S_SETTINGS).Range("B4").Value) Then
+        CleanupHistoryCore False
+    End If
+
+    On Error GoTo 0
+End Sub
+
+'============================================================
+' タスク登録
+'============================================================
+Public Sub RegisterTask()
+    Dim ws As Worksheet
+    Dim selfDue As Date
+    Dim actualDue As Date
+    Dim taskText As String
+    Dim repeatType As String
+    Dim intervalValue As Long
+    Dim dayValue As Long
+    Dim endValue As Variant
+    Dim seriesId As String
+
+    Set ws = ThisWorkbook.Worksheets(S_ENTRY)
+
+    taskText = Trim$(CStr(ws.Range("C3").Value))
+
+    If taskText = "" Then
+        MsgBox "タスクを入力してください。", vbExclamation
+        ws.Range("C3").Select
+        Exit Sub
+    End If
+
+    If Not IsDate(ws.Range("C5").Value) Then
+        MsgBox "自分納期を日付で入力してください。", vbExclamation
+        Exit Sub
+    End If
+
+    selfDue = DateValue(ws.Range("C5").Value)
+
+    If Trim$(CStr(ws.Range("F5").Value)) = "" Then
+        actualDue = selfDue
+    ElseIf IsDate(ws.Range("F5").Value) Then
+        actualDue = DateValue(ws.Range("F5").Value)
+    Else
+        MsgBox "実納期を日付で入力してください。", vbExclamation
+        Exit Sub
+    End If
+
+    If actualDue < selfDue Then
+        MsgBox "実納期を自分納期より前にはできません。", vbExclamation
+        Exit Sub
+    End If
+
+    repeatType = Trim$(CStr(ws.Range("C15").Value))
+    If repeatType = "" Then repeatType = REC_NONE
+
+    If IsNumeric(ws.Range("F15").Value) Then
+        intervalValue = CLng(ws.Range("F15").Value)
+    Else
+        intervalValue = 1
+    End If
+
+    If IsNumeric(ws.Range("C19").Value) Then
+        dayValue = CLng(ws.Range("C19").Value)
+    Else
+        dayValue = 1
+    End If
+
+    endValue = ws.Range("C21").Value
+
+    If Not ValidateRepeatInput( _
+        repeatType, intervalValue, CStr(ws.Range("F17").Value), _
+        dayValue, CStr(ws.Range("F19").Value), endValue, selfDue) Then
+        Exit Sub
+    End If
+
+    If repeatType <> REC_NONE Then
+        seriesId = NewId("R")
+    End If
+
+    On Error GoTo ErrorHandler
+    Application.EnableEvents = False
+
+    AppendTask _
+        taskText, _
+        selfDue, _
+        actualDue, _
+        CStr(ws.Range("C7").Value), _
+        DefaultText(ws.Range("F7").Value, "中"), _
+        DefaultText(ws.Range("C9").Value, "業務"), _
+        DefaultText(ws.Range("F9").Value, "未着手"), _
+        repeatType, _
+        seriesId, _
+        CStr(ws.Range("C11").Value), _
+        intervalValue, _
+        DefaultText(ws.Range("C17").Value, "元の納期"), _
+        DefaultText(ws.Range("F17").Value, "月"), _
+        dayValue, _
+        DefaultText(ws.Range("F19").Value, "第1"), _
+        endValue, _
+        CLng(actualDue - selfDue)
+
+    ClearEntryFormCore False
+    SortTasks False
+
+    ThisWorkbook.Worksheets(S_TODO).Activate
+
+    Application.EnableEvents = True
+
+    MsgBox "タスクを登録しました。", vbInformation
+    Exit Sub
+
+ErrorHandler:
+    Application.EnableEvents = True
+
+    MsgBox "登録中にエラーが発生しました。" & vbCrLf & _
+           Err.Description, vbExclamation
+End Sub
+
+Public Sub ClearEntryForm()
+    ClearEntryFormCore True
+End Sub
+
+Private Sub ClearEntryFormCore(ByVal showMessage As Boolean)
+    Dim ws As Worksheet
+
+    Set ws = ThisWorkbook.Worksheets(S_ENTRY)
+
+    ws.Range("C3").ClearContents
+    ws.Range("C5").Value = Date
+    ws.Range("F5").Formula = "=C5"
+    ws.Range("C7").ClearContents
+    ws.Range("F7").Value = "中"
+    ws.Range("C9").Value = "業務"
+    ws.Range("F9").Value = "未着手"
+    ws.Range("C11").ClearContents
+    ws.Range("C15").Value = REC_NONE
+    ws.Range("F15").Value = 1
+    ws.Range("C17").Value = "元の納期"
+    ws.Range("F17").Value = "月"
+    ws.Range("C19").Value = 1
+    ws.Range("F19").Value = "第1"
+    ws.Range("C21").ClearContents
+
+    If showMessage Then
+        MsgBox "入力欄をクリアしました。", vbInformation
+    End If
+End Sub
+
+Private Function ValidateRepeatInput( _
+    ByVal repeatType As String, _
+    ByVal intervalValue As Long, _
+    ByVal weekdayText As String, _
+    ByVal dayValue As Long, _
+    ByVal ordinalText As String, _
+    ByVal endValue As Variant, _
+    ByVal firstDue As Date) As Boolean
+
+    If repeatType = REC_NONE Then
+        ValidateRepeatInput = True
+        Exit Function
+    End If
+
+    If intervalValue < 1 Or intervalValue > 99 Then
+        MsgBox "間隔は1～99で入力してください。", vbExclamation
+        Exit Function
+    End If
+
+    If repeatType = REC_WEEKLY Or _
+       repeatType = REC_MONTH_ORDINAL Then
+
+        If Len(weekdayText) <> 1 Or _
+           InStr("月火水木金土日", weekdayText) = 0 Then
+
+            MsgBox "曜日を選択してください。", vbExclamation
+            Exit Function
+        End If
+    End If
+
+    If repeatType = REC_MONTH_DAY Then
+        If dayValue < 1 Or dayValue > 31 Then
+            MsgBox "日付は1～31で入力してください。", vbExclamation
+            Exit Function
+        End If
+    End If
+
+    If repeatType = REC_MONTH_ORDINAL Then
+        Select Case ordinalText
+            Case "第1", "第2", "第3", "第4", "最終"
+            Case Else
+                MsgBox "第何週を選択してください。", vbExclamation
+                Exit Function
+        End Select
+    End If
+
+    If Trim$(CStr(endValue)) <> "" Then
+        If Not IsDate(endValue) Then
+            MsgBox "繰返し終了日を日付で入力してください。", vbExclamation
+            Exit Function
+        End If
+
+        If DateValue(endValue) < firstDue Then
+            MsgBox "繰返し終了日は最初の納期以降にしてください。", vbExclamation
+            Exit Function
+        End If
+    End If
+
+    ValidateRepeatInput = True
+End Function
+
+'============================================================
+' 完了・削除・復元
+'============================================================
+Public Sub CompleteSelectedTask()
+    Dim lr As ListRow
+
+    Set lr = SelectedListRow(TodoTable)
+
+    If lr Is Nothing Then
+        MsgBox "完了するタスクの行を選択してください。", vbExclamation
+        Exit Sub
+    End If
+
+    CompleteRow lr
+End Sub
+
+Public Sub CompleteTaskFromCell(ByVal target As Range)
+    Dim lr As ListRow
+
+    Set lr = ListRowFromCell(TodoTable, target)
+
+    If Not lr Is Nothing Then
+        CompleteRow lr
+    End If
+End Sub
+
+Public Function IsDoneCell( _
+    ByVal Sh As Object, _
+    ByVal target As Range) As Boolean
+
+    Dim lo As ListObject
+
+    On Error GoTo ExitPoint
+
+    If Sh.Name <> S_TODO Then Exit Function
+    If target.CountLarge <> 1 Then Exit Function
+
+    Set lo = TodoTable
+
+    If lo.DataBodyRange Is Nothing Then Exit Function
+
+    IsDoneCell = Not Intersect( _
+        target, lo.ListColumns(C_DONE).DataBodyRange) Is Nothing
+
+ExitPoint:
+End Function
+
+Private Sub CompleteRow(ByVal lr As ListRow)
+    Dim taskText As String
+    Dim successorId As String
+
+    taskText = Trim$(CStr(lr.Range.Cells(1, C_TASK).Value))
+    If taskText = "" Then Exit Sub
+
+    If MsgBox( _
+        "次のタスクを完了にしますか？" & vbCrLf & vbCrLf & taskText, _
+        vbQuestion + vbYesNo) <> vbYes Then
+        Exit Sub
+    End If
+
+    On Error GoTo ErrorHandler
+    Application.EnableEvents = False
+
+    successorId = CreateSuccessor(lr)
+
+    ArchiveRow lr, "完了", successorId
+    lr.Delete
+
+    EnsureBlankRow TodoTable
+    SortTasks False
+
+    Application.EnableEvents = True
+
+    If successorId = "" Then
+        MsgBox "完了履歴へ移動しました。", vbInformation
+    Else
+        MsgBox "完了履歴へ移動し、次回タスクを追加しました。", vbInformation
+    End If
+
+    Exit Sub
+
+ErrorHandler:
+    Application.EnableEvents = True
+
+    MsgBox "完了処理中にエラーが発生しました。" & vbCrLf & _
+           Err.Description, vbExclamation
+End Sub
+
+Public Sub DeleteSelectedTask()
+    Dim lr As ListRow
+    Dim taskText As String
+
+    Set lr = SelectedListRow(TodoTable)
+
+    If lr Is Nothing Then
+        MsgBox "削除するタスクの行を選択してください。", vbExclamation
+        Exit Sub
+    End If
+
+    taskText = Trim$(CStr(lr.Range.Cells(1, C_TASK).Value))
+    If taskText = "" Then Exit Sub
+
+    If MsgBox( _
+        "次のタスクを削除しますか？" & vbCrLf & vbCrLf & _
+        taskText & vbCrLf & vbCrLf & _
+        "削除後も履歴から復元できます。", _
+        vbQuestion + vbYesNo) <> vbYes Then
+        Exit Sub
+    End If
+
+    On Error GoTo ErrorHandler
+    Application.EnableEvents = False
+
+    ArchiveRow lr, "削除", ""
+    lr.Delete
+
+    EnsureBlankRow TodoTable
+    SortTasks False
+
+    Application.EnableEvents = True
+
+    MsgBox "削除履歴へ移動しました。", vbInformation
+    Exit Sub
+
+ErrorHandler:
+    Application.EnableEvents = True
+
+    MsgBox "削除処理中にエラーが発生しました。" & vbCrLf & _
+           Err.Description, vbExclamation
+End Sub
+
+Public Sub RestoreSelectedTask()
+    Dim hr As ListRow
+    Dim tr As ListRow
+    Dim successor As ListRow
+    Dim existingTask As ListRow
+    Dim taskId As String
+    Dim successorId As String
+    Dim i As Long
+    Dim answer As VbMsgBoxResult
+
+    Set hr = SelectedListRow(HistoryTable)
+
+    If hr Is Nothing Then
+        MsgBox "復元する履歴の行を選択してください。", vbExclamation
+        Exit Sub
+    End If
+
+    If Trim$(CStr(hr.Range.Cells(1, 9).Value)) = "" Then
+        MsgBox "復元する履歴の行を選択してください。", vbExclamation
+        Exit Sub
+    End If
+
+    taskId = CStr(hr.Range.Cells(1, 13).Value)
+
+    Set existingTask = FindTodoById(taskId)
+
+    If Not existingTask Is Nothing Then
+        MsgBox "同じタスクIDがすでにToDoにあるため復元できません。", vbExclamation
+        Exit Sub
+    End If
+
+    successorId = CStr(hr.Range.Cells(1, 25).Value)
+
+    If successorId <> "" Then
+        Set successor = FindTodoById(successorId)
+    End If
+
+    If Not successor Is Nothing Then
+        answer = MsgBox( _
+            "この完了時に作られた次回タスクが残っています。" & vbCrLf & _
+            "次回タスクも削除しますか？", _
+            vbQuestion + vbYesNoCancel)
+
+        If answer = vbCancel Then Exit Sub
+    End If
+
+    If MsgBox( _
+        "「" & CStr(hr.Range.Cells(1, 9).Value) & _
+        "」をToDoへ復元しますか？", _
+        vbQuestion + vbYesNo) <> vbYes Then
+        Exit Sub
+    End If
+
+    On Error GoTo ErrorHandler
+    Application.EnableEvents = False
+
+    If answer = vbYes And Not successor Is Nothing Then
+        successor.Delete
+    End If
+
+    Set tr = WritableRow(TodoTable)
+
+    For i = 1 To 21
+        tr.Range.Cells(1, i).Value = _
+            hr.Range.Cells(1, i + 3).Value
+    Next i
+
+    tr.Range.Cells(1, C_DONE).Value = "□"
+
+    hr.Delete
+
+    EnsureBlankRow TodoTable
+    EnsureBlankRow HistoryTable
+
+    SortTasks False
+
+    ThisWorkbook.Worksheets(S_TODO).Activate
+
+    Application.EnableEvents = True
+
+    MsgBox "ToDoへ復元しました。", vbInformation
+    Exit Sub
+
+ErrorHandler:
+    Application.EnableEvents = True
+
+    MsgBox "復元処理中にエラーが発生しました。" & vbCrLf & _
+           Err.Description, vbExclamation
+End Sub
+
+Private Sub ArchiveRow( _
+    ByVal sourceRow As ListRow, _
+    ByVal actionText As String, _
+    ByVal successorId As String)
+
+    Dim hr As ListRow
+    Dim i As Long
+
+    Set hr = WritableRow(HistoryTable)
+
+    hr.Range.Cells(1, 1).Value = "戻す"
+    hr.Range.Cells(1, 2).Value = actionText
+    hr.Range.Cells(1, 3).Value = Now
+
+    For i = 1 To 21
+        hr.Range.Cells(1, i + 3).Value = _
+            sourceRow.Range.Cells(1, i).Value
+    Next i
+
+    hr.Range.Cells(1, 25).Value = successorId
+End Sub
+
+Private Function CreateSuccessor( _
+    ByVal sourceRow As ListRow) As String
+
+    Dim repeatType As String
+    Dim seriesId As String
+    Dim existingId As String
+    Dim intervalValue As Long
+    Dim dayValue As Long
+    Dim dueOffset As Long
+    Dim nextDue As Date
+    Dim actualDue As Date
+    Dim endValue As Variant
+
+    repeatType = Trim$(CStr( _
+        sourceRow.Range.Cells(1, C_REPEAT).Value))
+
+    If repeatType = "" Or repeatType = REC_NONE Then Exit Function
+
+    If IsNumeric(sourceRow.Range.Cells(1, C_INTERVAL).Value) Then
+        intervalValue = CLng( _
+            sourceRow.Range.Cells(1, C_INTERVAL).Value)
+    Else
+        intervalValue = 1
+    End If
+
+    If IsNumeric(sourceRow.Range.Cells(1, C_DAY).Value) Then
+        dayValue = CLng(sourceRow.Range.Cells(1, C_DAY).Value)
+    Else
+        dayValue = 1
+    End If
+
+    If IsNumeric(sourceRow.Range.Cells(1, C_DUE_OFFSET).Value) Then
+        dueOffset = CLng( _
+            sourceRow.Range.Cells(1, C_DUE_OFFSET).Value)
+    End If
+
+    If dueOffset < 0 Then dueOffset = 0
+
+    nextDue = NextDueDate( _
+        DateValue(sourceRow.Range.Cells(1, C_SELF_DUE).Value), _
+        Date, _
+        repeatType, _
+        intervalValue, _
+        CStr(sourceRow.Range.Cells(1, C_BASE).Value), _
+        CStr(sourceRow.Range.Cells(1, C_WEEKDAY).Value), _
+        dayValue, _
+        CStr(sourceRow.Range.Cells(1, C_ORDINAL).Value))
+
+    If nextDue = 0 Then Exit Function
+
+    endValue = sourceRow.Range.Cells(1, C_END_DATE).Value
+
+    If IsDate(endValue) Then
+        If nextDue > DateValue(endValue) Then Exit Function
+    End If
+
+    seriesId = CStr( _
+        sourceRow.Range.Cells(1, C_SERIES_ID).Value)
+
+    If seriesId = "" Then
+        seriesId = NewId("R")
+        sourceRow.Range.Cells(1, C_SERIES_ID).Value = seriesId
+    End If
+
+    existingId = ExistingSeriesDueId(seriesId, nextDue)
+
+    If existingId <> "" Then
+        CreateSuccessor = existingId
+        Exit Function
+    End If
+
+    actualDue = DateAdd("d", dueOffset, nextDue)
+
+    CreateSuccessor = AppendTask( _
+        CStr(sourceRow.Range.Cells(1, C_TASK).Value), _
+        nextDue, _
+        actualDue, _
+        CStr(sourceRow.Range.Cells(1, C_NUMBER).Value), _
+        CStr(sourceRow.Range.Cells(1, C_PRIORITY).Value), _
+        CStr(sourceRow.Range.Cells(1, C_CATEGORY).Value), _
+        "未着手", _
+        repeatType, _
+        seriesId, _
+        CStr(sourceRow.Range.Cells(1, C_MEMO).Value), _
+        intervalValue, _
+        CStr(sourceRow.Range.Cells(1, C_BASE).Value), _
+        CStr(sourceRow.Range.Cells(1, C_WEEKDAY).Value), _
+        dayValue, _
+        CStr(sourceRow.Range.Cells(1, C_ORDINAL).Value), _
+        endValue, _
+        dueOffset)
+End Function
+
+'============================================================
+' テーブル追加・検証・並べ替え
+'============================================================
+Private Function AppendTask( _
+    ByVal taskText As String, _
+    ByVal selfDue As Date, _
+    ByVal actualDue As Date, _
+    ByVal numberText As String, _
+    ByVal priorityText As String, _
+    ByVal categoryText As String, _
+    ByVal statusText As String, _
+    ByVal repeatType As String, _
+    ByVal seriesId As String, _
+    ByVal memoText As String, _
+    ByVal intervalValue As Long, _
+    ByVal baseText As String, _
+    ByVal weekdayText As String, _
+    ByVal dayValue As Long, _
+    ByVal ordinalText As String, _
+    ByVal endValue As Variant, _
+    ByVal dueOffset As Long, _
+    Optional ByVal requestedTaskId As String = "", _
+    Optional ByVal createdAt As Variant) As String
+
+    Dim lr As ListRow
+    Dim taskId As String
+
+    Set lr = WritableRow(TodoTable)
+
+    If requestedTaskId = "" Then
+        taskId = NewId("T")
+    Else
+        taskId = requestedTaskId
+    End If
+
+    With lr.Range
+        .Cells(1, C_DONE).Value = "□"
+        .Cells(1, C_PRIORITY).Value = priorityText
+        .Cells(1, C_SELF_DUE).Value = DateValue(selfDue)
+        .Cells(1, C_ACTUAL_DUE).Value = DateValue(actualDue)
+        .Cells(1, C_NUMBER).Value = numberText
+        .Cells(1, C_TASK).Value = taskText
+        .Cells(1, C_STATUS).Value = statusText
+        .Cells(1, C_CATEGORY).Value = categoryText
+        .Cells(1, C_REPEAT).Value = repeatType
+        .Cells(1, C_TASK_ID).Value = taskId
+        .Cells(1, C_SERIES_ID).Value = seriesId
+
+        If IsDate(createdAt) Then
+            .Cells(1, C_CREATED).Value = CDate(createdAt)
+        Else
+            .Cells(1, C_CREATED).Value = Now
+        End If
+
+        .Cells(1, C_MEMO).Value = memoText
+        .Cells(1, C_INTERVAL).Value = intervalValue
+        .Cells(1, C_BASE).Value = baseText
+        .Cells(1, C_WEEKDAY).Value = weekdayText
+        .Cells(1, C_DAY).Value = dayValue
+        .Cells(1, C_ORDINAL).Value = ordinalText
+
+        If IsDate(endValue) Then
+            .Cells(1, C_END_DATE).Value = DateValue(endValue)
+        End If
+
+        .Cells(1, C_DUE_OFFSET).Value = dueOffset
+    End With
+
+    AppendTask = taskId
+End Function
+
+Public Sub ValidateAndSortTasks()
+    Dim lr As ListRow
+
+    For Each lr In TodoTable.ListRows
+        If Trim$(CStr(lr.Range.Cells(1, C_TASK).Value)) <> "" Then
+
+            If Not IsDate(lr.Range.Cells(1, C_SELF_DUE).Value) Or _
+               Not IsDate(lr.Range.Cells(1, C_ACTUAL_DUE).Value) Then
+
+                MsgBox "納期が日付ではない行があります。", vbExclamation
+                lr.Range.Select
+                Exit Sub
+            End If
+
+            If DateValue(lr.Range.Cells(1, C_ACTUAL_DUE).Value) < _
+               DateValue(lr.Range.Cells(1, C_SELF_DUE).Value) Then
+
+                MsgBox "実納期が自分納期より前の行があります。", vbExclamation
+                lr.Range.Cells(1, C_ACTUAL_DUE).Select
+                Exit Sub
+            End If
+
+            If CStr(lr.Range.Cells(1, C_TASK_ID).Value) = "" Then
+                lr.Range.Cells(1, C_TASK_ID).Value = NewId("T")
+            End If
+
+            If CStr(lr.Range.Cells(1, C_DONE).Value) = "" Then
+                lr.Range.Cells(1, C_DONE).Value = "□"
+            End If
+        End If
+    Next lr
+
+    SortTasks False
+
+    MsgBox "入力内容を確認し、納期順に並べ替えました。", vbInformation
+End Sub
+
+Public Sub SortTasks( _
+    Optional ByVal showMessage As Boolean = True)
+
+    Dim lo As ListObject
+
+    On Error GoTo ExitPoint
+
+    Set lo = TodoTable
+
+    With lo.Sort
+        .SortFields.Clear
+
+        .SortFields.Add _
+            Key:=lo.ListColumns(C_SELF_DUE).Range, _
+            Order:=xlAscending
+
+        .SortFields.Add _
+            Key:=lo.ListColumns(C_PRIORITY).Range, _
+            Order:=xlAscending, _
+            CustomOrder:="高,中,低"
+
+        .Header = xlYes
+        .Apply
+    End With
+
+    If showMessage Then
+        MsgBox "納期順に並べ替えました。", vbInformation
+    End If
+
+ExitPoint:
+End Sub
+
+Public Sub OpenEntryForm()
+    ThisWorkbook.Worksheets(S_ENTRY).Activate
+    ThisWorkbook.Worksheets(S_ENTRY).Range("C3").Select
+End Sub
+
+'============================================================
+' 履歴整理
+'============================================================
+Public Sub CleanupHistory()
+    CleanupHistoryCore True
+End Sub
+
+Private Sub CleanupHistoryCore(ByVal showMessage As Boolean)
+    Dim daysToKeep As Long
+    Dim cutoffDate As Date
+    Dim i As Long
+    Dim deleteCount As Long
+    Dim lo As ListObject
+
+    Set lo = HistoryTable
+
+    If IsNumeric( _
+        ThisWorkbook.Worksheets(S_SETTINGS).Range("B5").Value) Then
+
+        daysToKeep = CLng( _
+            ThisWorkbook.Worksheets(S_SETTINGS).Range("B5").Value)
+    Else
+        daysToKeep = 90
+    End If
+
+    If daysToKeep < 1 Then daysToKeep = 1
+
+    cutoffDate = DateAdd("d", -daysToKeep, Date)
+
+    For i = lo.ListRows.Count To 1 Step -1
+        If IsDate(lo.ListRows(i).Range.Cells(1, 3).Value) Then
+            If CDate(lo.ListRows(i).Range.Cells(1, 3).Value) < _
+               cutoffDate Then
+
+                deleteCount = deleteCount + 1
+            End If
+        End If
+    Next i
+
+    If deleteCount = 0 Then
+        If showMessage Then
+            MsgBox "整理対象の履歴はありません。", vbInformation
+        End If
+        Exit Sub
+    End If
+
+    If showMessage Then
+        If MsgBox( _
+            deleteCount & _
+            "件の履歴を完全に削除します。元には戻せません。続けますか？", _
+            vbExclamation + vbYesNo) <> vbYes Then
+            Exit Sub
+        End If
+    End If
+
+    For i = lo.ListRows.Count To 1 Step -1
+        If IsDate(lo.ListRows(i).Range.Cells(1, 3).Value) Then
+            If CDate(lo.ListRows(i).Range.Cells(1, 3).Value) < _
+               cutoffDate Then
+
+                lo.ListRows(i).Delete
+            End If
+        End If
+    Next i
+
+    EnsureBlankRow lo
+
+    If showMessage Then
+        MsgBox deleteCount & "件の履歴を削除しました。", vbInformation
+    End If
+End Sub
+
+'============================================================
+' 繰り返し納期計算
+'============================================================
+Private Function NextDueDate( _
+    ByVal scheduledDue As Date, _
+    ByVal completedOn As Date, _
+    ByVal repeatType As String, _
+    ByVal intervalValue As Long, _
+    ByVal baseText As String, _
+    ByVal weekdayText As String, _
+    ByVal dayValue As Long, _
+    ByVal ordinalText As String) As Date
+
+    Dim baseDate As Date
+    Dim monthDate As Date
+
+    If intervalValue < 1 Then intervalValue = 1
+
+    If baseText = "完了日" Then
+        baseDate = DateValue(completedOn)
+    Else
+        baseDate = DateValue(scheduledDue)
+    End If
+
+    Select Case repeatType
+
+        Case REC_DAILY
+            NextDueDate = DateAdd("d", intervalValue, baseDate)
+
+        Case REC_WEEKDAY
+            NextDueDate = AddBusinessDays(baseDate, intervalValue)
+
+        Case REC_WEEKLY
+            NextDueDate = NextWeekday( _
+                baseDate, WeekdayNumber(weekdayText), intervalValue)
+
+        Case REC_MONTH_DAY
+            monthDate = DateSerial( _
+                Year(baseDate), Month(baseDate) + intervalValue, 1)
+
+            NextDueDate = SafeMonthDate( _
+                Year(monthDate), Month(monthDate), dayValue)
+
+        Case REC_MONTH_ORDINAL
+            monthDate = DateSerial( _
+                Year(baseDate), Month(baseDate) + intervalValue, 1)
+
+            NextDueDate = NthWeekday( _
+                Year(monthDate), _
+                Month(monthDate), _
+                WeekdayNumber(weekdayText), _
+                OrdinalNumber(ordinalText))
+
+        Case REC_MONTH_END
+            NextDueDate = DateSerial( _
+                Year(baseDate), _
+                Month(baseDate) + intervalValue + 1, _
+                0)
+
+        Case REC_BUSINESS_MONTH_END
+            NextDueDate = PreviousBusinessDay( _
+                DateSerial( _
+                    Year(baseDate), _
+                    Month(baseDate) + intervalValue + 1, _
+                    0))
+    End Select
+End Function
+
+Private Function NextWeekday( _
+    ByVal baseDate As Date, _
+    ByVal targetWeekday As Long, _
+    ByVal intervalValue As Long) As Date
+
+    Dim gap As Long
+
+    gap = (targetWeekday - Weekday(baseDate, vbMonday) + 7) Mod 7
+
+    If gap = 0 Then
+        gap = 7 * intervalValue
+    Else
+        gap = gap + 7 * (intervalValue - 1)
+    End If
+
+    NextWeekday = DateAdd("d", gap, baseDate)
+End Function
+
+Private Function SafeMonthDate( _
+    ByVal targetYear As Long, _
+    ByVal targetMonth As Long, _
+    ByVal targetDay As Long) As Date
+
+    Dim lastDay As Long
+
+    If targetDay < 1 Then targetDay = 1
+    If targetDay > 31 Then targetDay = 31
+
+    lastDay = Day(DateSerial(targetYear, targetMonth + 1, 0))
+
+    If targetDay > lastDay Then
+        targetDay = lastDay
+    End If
+
+    SafeMonthDate = DateSerial( _
+        targetYear, targetMonth, targetDay)
+End Function
+
+Private Function NthWeekday( _
+    ByVal targetYear As Long, _
+    ByVal targetMonth As Long, _
+    ByVal targetWeekday As Long, _
+    ByVal ordinal As Long) As Date
+
+    Dim firstDate As Date
+    Dim lastDate As Date
+    Dim resultDate As Date
+    Dim gap As Long
+
+    If ordinal = 0 Then
+        lastDate = DateSerial(targetYear, targetMonth + 1, 0)
+
+        gap = (Weekday(lastDate, vbMonday) - _
+               targetWeekday + 7) Mod 7
+
+        NthWeekday = DateAdd("d", -gap, lastDate)
+    Else
+        firstDate = DateSerial(targetYear, targetMonth, 1)
+
+        gap = (targetWeekday - _
+               Weekday(firstDate, vbMonday) + 7) Mod 7
+
+        resultDate = DateAdd( _
+            "d", gap + 7 * (ordinal - 1), firstDate)
+
+        If Month(resultDate) = targetMonth Then
+            NthWeekday = resultDate
+        End If
+    End If
+End Function
+
+Private Function AddBusinessDays( _
+    ByVal startDate As Date, _
+    ByVal numberOfDays As Long) As Date
+
+    Dim resultDate As Date
+    Dim added As Long
+
+    resultDate = DateValue(startDate)
+
+    Do While added < numberOfDays
+        resultDate = DateAdd("d", 1, resultDate)
+
+        If IsBusinessDay(resultDate) Then
+            added = added + 1
+        End If
+    Loop
+
+    AddBusinessDays = resultDate
+End Function
+
+Private Function PreviousBusinessDay( _
+    ByVal startDate As Date) As Date
+
+    Dim resultDate As Date
+
+    resultDate = DateValue(startDate)
+
+    Do While Not IsBusinessDay(resultDate)
+        resultDate = DateAdd("d", -1, resultDate)
+    Loop
+
+    PreviousBusinessDay = resultDate
+End Function
+
+Private Function IsBusinessDay( _
+    ByVal checkDate As Date) As Boolean
+
+    If Weekday(checkDate, vbMonday) > 5 Then Exit Function
+    If IsHoliday(checkDate) Then Exit Function
+
+    IsBusinessDay = True
+End Function
+
+Private Function IsHoliday( _
+    ByVal checkDate As Date) As Boolean
+
+    Dim cell As Range
+
+    On Error GoTo ExitPoint
+
+    For Each cell In _
+        ThisWorkbook.Worksheets(S_SETTINGS).Range("A10:A300").Cells
+
+        If IsDate(cell.Value) Then
+            If CLng(DateValue(cell.Value)) = _
+               CLng(DateValue(checkDate)) Then
+
+                IsHoliday = True
+                Exit Function
+            End If
+        End If
+    Next cell
+
+ExitPoint:
+End Function
+
+Private Function WeekdayNumber(ByVal text As String) As Long
+    Select Case Trim$(text)
+        Case "月": WeekdayNumber = 1
+        Case "火": WeekdayNumber = 2
+        Case "水": WeekdayNumber = 3
+        Case "木": WeekdayNumber = 4
+        Case "金": WeekdayNumber = 5
+        Case "土": WeekdayNumber = 6
+        Case "日": WeekdayNumber = 7
+        Case Else: WeekdayNumber = 1
+    End Select
+End Function
+
+Private Function OrdinalNumber(ByVal text As String) As Long
+    Select Case Trim$(text)
+        Case "第1": OrdinalNumber = 1
+        Case "第2": OrdinalNumber = 2
+        Case "第3": OrdinalNumber = 3
+        Case "第4": OrdinalNumber = 4
+        Case "最終": OrdinalNumber = 0
+        Case Else: OrdinalNumber = 1
+    End Select
+End Function
+
+'============================================================
+' シート作成
+'============================================================
+Private Sub BuildTodoSheet(ByVal ws As Worksheet)
+    Dim headers As Variant
+    Dim i As Long
+    Dim lo As ListObject
+
+    headers = Array( _
+        "完了", "優先度", "自分納期", "実納期", "番号", _
+        "タスク", "状態", "カテゴリ", "繰返し", "タスクID", _
+        "系列ID", "作成日時", "メモ", "間隔", "基準", _
+        "曜日", "日付", "第何週", "終了日", "実納期差", "予備")
+
+    FormatTitle _
+        ws, _
+        "MY TODO", _
+        "行を選んでボタンを押すか、「完了」列をダブルクリックします。", _
+        "U"
+
+    MakeCard _
+        ws.Range("A3:B3"), _
+        ws.Range("A4:B5"), _
+        "期限超過", _
+        "=COUNTIFS($C$11:$C$510,""<""&TODAY(),$F$11:$F$510,""<>")", _
+        RGB(252, 232, 230)
+
+    MakeCard _
+        ws.Range("D3:E3"), _
+        ws.Range("D4:E5"), _
+        "今日が納期", _
+        "=COUNTIFS($C$11:$C$510,TODAY(),$F$11:$F$510,""<>")", _
+        RGB(255, 243, 214)
+
+    MakeCard _
+        ws.Range("G3:H3"), _
+        ws.Range("G4:H5"), _
+        "7日以内", _
+        "=COUNTIFS($C$11:$C$510,"">=""&TODAY(),$C$11:$C$510,""<=""&TODAY()+7,$F$11:$F$510,""<>")", _
+        RGB(232, 244, 242)
+
+    MakeCard _
+        ws.Range("J3:K3"), _
+        ws.Range("J4:K5"), _
+        "未完了", _
+        "=COUNTIF($F$11:$F$510,""<>")", _
+        RGB(234, 242, 248)
+
+    AddButton _
+        ws, "A7:C8", "選択タスクを完了", _
+        "CompleteSelectedTask", RGB(42, 127, 120)
+
+    AddButton _
+        ws, "D7:F8", "変更確認・並べ替え", _
+        "ValidateAndSortTasks", RGB(47, 107, 154)
+
+    AddButton _
+        ws, "G7:I8", "選択タスクを削除", _
+        "DeleteSelectedTask", RGB(177, 58, 52)
+
+    AddButton _
+        ws, "J7:M8", "新しいタスクを入力", _
+        "OpenEntryForm", RGB(23, 50, 77)
+
+    For i = 0 To UBound(headers)
+        ws.Cells(10, i + 1).Value = headers(i)
+    Next i
+
+    Set lo = ws.ListObjects.Add( _
+        xlSrcRange, ws.Range("A10:U11"), , xlYes)
+
+    lo.Name = T_TODO
+    lo.TableStyle = "TableStyleMedium2"
+
+    ws.Range("C11:D510").NumberFormat = "yyyy-mm-dd"
+    ws.Range("L11:L510").NumberFormat = "yyyy-mm-dd hh:mm"
+    ws.Range("S11:S510").NumberFormat = "yyyy-mm-dd"
+
+    ws.Columns("A").ColumnWidth = 7
+    ws.Columns("B").ColumnWidth = 9
+    ws.Columns("C:D").ColumnWidth = 12
+    ws.Columns("E").ColumnWidth = 14
+    ws.Columns("F").ColumnWidth = 30
+    ws.Columns("G:I").ColumnWidth = 11
+    ws.Columns("L").ColumnWidth = 18
+    ws.Columns("M").ColumnWidth = 25
+
+    ws.Columns("J:K").Hidden = True
+    ws.Columns("N:U").Hidden = True
+
+    With ws.Range("A11:M510")
+        .FormatConditions.Delete
+
+        .FormatConditions.Add _
+            Type:=xlExpression, _
+            Formula1:="=AND($F11<>"""",$C11<TODAY())"
+
+        .FormatConditions( _
+            .FormatConditions.Count).Interior.Color = _
+            RGB(252, 232, 230)
+
+        .FormatConditions.Add _
+            Type:=xlExpression, _
+            Formula1:="=AND($F11<>"""",$C11=TODAY())"
+
+        .FormatConditions( _
+            .FormatConditions.Count).Interior.Color = _
+            RGB(255, 243, 214)
+    End With
+End Sub
+
+Private Sub BuildEntrySheet(ByVal ws As Worksheet)
+    FormatTitle _
+        ws, _
+        "タスク登録", _
+        "白いセルに入力して「登録する」を押します。", _
+        "H"
+
+    LabelAndInput ws, "B3", "タスク", "C3:H3", True
+    LabelAndInput ws, "B5", "自分納期", "C5", False
+    LabelAndInput ws, "E5", "実納期", "F5", False
+    LabelAndInput ws, "B7", "番号", "C7", False
+    LabelAndInput ws, "E7", "優先度", "F7", False
+    LabelAndInput ws, "B9", "カテゴリ", "C9", False
+    LabelAndInput ws, "E9", "状態", "F9", False
+    LabelAndInput ws, "B11", "メモ", "C11:H13", True
+
+    ws.Range("B14:H14").Merge
+    ws.Range("B14").Value = "繰り返し設定（必要な場合のみ）"
+    ws.Range("B14:H14").Interior.Color = RGB(42, 127, 120)
+    ws.Range("B14:H14").Font.Color = vbWhite
+    ws.Range("B14:H14").Font.Bold = True
+
+    LabelAndInput ws, "B15", "繰り返し", "C15", False
+    LabelAndInput ws, "E15", "間隔", "F15", False
+    LabelAndInput ws, "B17", "次回計算基準", "C17", False
+    LabelAndInput ws, "E17", "曜日", "F17", False
+    LabelAndInput ws, "B19", "日付", "C19", False
+    LabelAndInput ws, "E19", "第何週", "F19", False
+    LabelAndInput ws, "B21", "繰返し終了日", "C21", False
+
+    ws.Range("B23:H23").Merge
+    ws.Range("B23").Value = _
+        "間隔2なら隔週・隔月です。祝日は「設定」シートへ入力してください。"
+
+    ws.Range("B23:H23").Interior.Color = RGB(232, 244, 242)
+
+    AddButton _
+        ws, "B25:D27", "登録する", _
+        "RegisterTask", RGB(42, 127, 120)
+
+    AddButton _
+        ws, "E25:G27", "入力をクリア", _
+        "ClearEntryForm", RGB(102, 118, 133)
+
+    ws.Columns("A").ColumnWidth = 4
+    ws.Columns("B").ColumnWidth = 17
+    ws.Columns("C").ColumnWidth = 22
+    ws.Columns("D").ColumnWidth = 4
+    ws.Columns("E").ColumnWidth = 17
+    ws.Columns("F:H").ColumnWidth = 16
+
+    ws.Range("C5,F5,C21").NumberFormat = "yyyy-mm-dd"
+
+    ClearEntryFormCore False
+End Sub
+
+Private Sub BuildHistorySheet(ByVal ws As Worksheet)
+    Dim todoHeaders As Variant
+    Dim i As Long
+    Dim lo As ListObject
+
+    todoHeaders = Array( _
+        "完了", "優先度", "自分納期", "実納期", "番号", _
+        "タスク", "状態", "カテゴリ", "繰返し", "タスクID", _
+        "系列ID", "作成日時", "メモ", "間隔", "基準", _
+        "曜日", "日付", "第何週", "終了日", "実納期差", "予備")
+
+    FormatTitle _
+        ws, _
+        "完了・削除履歴", _
+        "誤操作した場合は、選択行をToDoへ復元できます。", _
+        "Y"
+
+    AddButton _
+        ws, "A3:C4", "選択タスクを復元", _
+        "RestoreSelectedTask", RGB(42, 127, 120)
+
+    AddButton _
+        ws, "D3:F4", "古い履歴を整理", _
+        "CleanupHistory", RGB(102, 118, 133)
+
+    ws.Range("G3:M4").Merge
+    ws.Range("G3").Value = _
+        "保持日数と自動整理は「設定」シートで変更できます。"
+
+    ws.Range("G3:M4").Interior.Color = RGB(234, 242, 248)
+
+    ws.Cells(6, 1).Value = "復元"
+    ws.Cells(6, 2).Value = "処理"
+    ws.Cells(6, 3).Value = "処理日時"
+
+    For i = 0 To UBound(todoHeaders)
+        ws.Cells(6, i + 4).Value = todoHeaders(i)
+    Next i
+
+    ws.Cells(6, 25).Value = "後継タスクID"
+
+    Set lo = ws.ListObjects.Add( _
+        xlSrcRange, ws.Range("A6:Y7"), , xlYes)
+
+    lo.Name = T_HISTORY
+    lo.TableStyle = "TableStyleMedium9"
+
+    ws.Range("C7:C506").NumberFormat = "yyyy-mm-dd hh:mm"
+    ws.Range("F7:G506").NumberFormat = "yyyy-mm-dd"
+    ws.Range("O7:O506").NumberFormat = "yyyy-mm-dd hh:mm"
+
+    ws.Columns("A:C").ColumnWidth = 10
+    ws.Columns("F:G").ColumnWidth = 12
+    ws.Columns("H").ColumnWidth = 14
+    ws.Columns("I").ColumnWidth = 30
+    ws.Columns("J:L").ColumnWidth = 11
+    ws.Columns("O").ColumnWidth = 18
+    ws.Columns("P").ColumnWidth = 25
+
+    ws.Columns("D").Hidden = True
+    ws.Columns("M:N").Hidden = True
+    ws.Columns("Q:Y").Hidden = True
+End Sub
+
+Private Sub BuildSettingsSheet(ByVal ws As Worksheet)
+    Dim categories As Variant
+    Dim priorities As Variant
+    Dim statuses As Variant
+    Dim repeats As Variant
+    Dim bases As Variant
+    Dim weekdays As Variant
+    Dim ordinals As Variant
+
+    FormatTitle _
+        ws, _
+        "設定", _
+        "青いセルは編集できます。祝日は平日・月末営業日の計算から除外します。", _
+        "Q"
+
+    ws.Range("A3:B3").Merge
+    ws.Range("A3").Value = "履歴設定"
+    ws.Range("A3:B3").Interior.Color = RGB(23, 50, 77)
+    ws.Range("A3:B3").Font.Color = vbWhite
+
+    ws.Range("A4").Value = "自動整理"
+    ws.Range("B4").Value = False
+
+    ws.Range("A5").Value = "保持日数"
+    ws.Range("B5").Value = 90
+
+    categories = Array("業務", "確認", "連絡", "締切", "個人")
+    priorities = Array("高", "中", "低")
+    statuses = Array("未着手", "進行中", "保留")
+
+    repeats = Array( _
+        REC_NONE, _
+        REC_DAILY, _
+        REC_WEEKDAY, _
+        REC_WEEKLY, _
+        REC_MONTH_DAY, _
+        REC_MONTH_ORDINAL, _
+        REC_MONTH_END, _
+        REC_BUSINESS_MONTH_END)
+
+    bases = Array("元の納期", "完了日")
+    weekdays = Array("月", "火", "水", "木", "金", "土", "日")
+    ordinals = Array("第1", "第2", "第3", "第4", "最終")
+
+    WriteList ws, "E3", "カテゴリ", categories
+    WriteList ws, "G3", "優先度", priorities
+    WriteList ws, "I3", "状態", statuses
+    WriteList ws, "K3", "繰り返し", repeats
+    WriteList ws, "M3", "計算基準", bases
+    WriteList ws, "O3", "曜日", weekdays
+    WriteList ws, "Q3", "第何週", ordinals
+
+    ws.Range("A8:B8").Merge
+    ws.Range("A8").Value = "祝日一覧"
+    ws.Range("A8:B8").Interior.Color = RGB(42, 127, 120)
+    ws.Range("A8:B8").Font.Color = vbWhite
+
+    ws.Range("A9").Value = "日付"
+    ws.Range("B9").Value = "名称"
+
+    With ws.ListObjects.Add( _
+        xlSrcRange, ws.Range("A9:B10"), , xlYes)
+
+        .Name = "tblHolidays"
+        .TableStyle = "TableStyleMedium4"
+    End With
+
+    ws.Range("A10:A300").NumberFormat = "yyyy-mm-dd"
+    ws.Columns("A:B").ColumnWidth = 18
+    ws.Columns("E:Q").ColumnWidth = 15
+End Sub
+
+'============================================================
+' UI・共通処理
+'============================================================
+Private Function ResetSheet(ByVal sheetName As String) As Worksheet
+    Dim ws As Worksheet
+    Dim i As Long
+
+    On Error Resume Next
+    Set ws = ThisWorkbook.Worksheets(sheetName)
+    On Error GoTo 0
+
+    If ws Is Nothing Then
+        Set ws = ThisWorkbook.Worksheets.Add( _
+            After:=ThisWorkbook.Worksheets( _
+                ThisWorkbook.Worksheets.Count))
+
+        ws.Name = sheetName
+    Else
+        For i = ws.ListObjects.Count To 1 Step -1
+            ws.ListObjects(i).Unlist
+        Next i
+
+        For i = ws.Shapes.Count To 1 Step -1
+            ws.Shapes(i).Delete
+        Next i
+
+        ws.Cells.UnMerge
+        ws.Cells.Clear
+        ws.Columns.Hidden = False
+    End If
+
+    ws.Cells.Font.Name = "Yu Gothic UI"
+    ws.Cells.Font.Size = 10
+
+    ws.Activate
+    ActiveWindow.DisplayGridlines = False
+
+    Set ResetSheet = ws
+End Function
+
+Private Sub FormatTitle( _
+    ByVal ws As Worksheet, _
+    ByVal titleText As String, _
+    ByVal subText As String, _
+    ByVal lastColumn As String)
+
+    ws.Range("A1:" & lastColumn & "1").Merge
+    ws.Range("A1").Value = titleText
+
+    With ws.Range("A1:" & lastColumn & "1")
+        .Interior.Color = RGB(23, 50, 77)
+        .Font.Color = vbWhite
+        .Font.Bold = True
+        .Font.Size = 20
+    End With
+
+    ws.Rows(1).RowHeight = 34
+
+    ws.Range("A2:" & lastColumn & "2").Merge
+    ws.Range("A2").Value = subText
+
+    With ws.Range("A2:" & lastColumn & "2")
+        .Interior.Color = RGB(234, 242, 248)
+        .Font.Color = RGB(102, 118, 133)
+    End With
+End Sub
+
+Private Sub MakeCard( _
+    ByVal labelRange As Range, _
+    ByVal valueRange As Range, _
+    ByVal labelText As String, _
+    ByVal formulaText As String, _
+    ByVal fillColor As Long)
+
+    labelRange.Merge
+    labelRange.Cells(1, 1).Value = labelText
+    labelRange.Interior.Color = fillColor
+    labelRange.Font.Bold = True
+    labelRange.HorizontalAlignment = xlCenter
+
+    valueRange.Merge
+    valueRange.Cells(1, 1).Formula = formulaText
+    valueRange.Font.Size = 22
+    valueRange.Font.Bold = True
+    valueRange.HorizontalAlignment = xlCenter
+    valueRange.VerticalAlignment = xlCenter
+End Sub
+
+Private Sub AddButton( _
+    ByVal ws As Worksheet, _
+    ByVal address As String, _
+    ByVal caption As String, _
+    ByVal macroName As String, _
+    ByVal fillColor As Long)
+
+    Dim target As Range
+    Dim shp As Shape
+
+    Set target = ws.Range(address)
+    target.Merge
+
+    Set shp = ws.Shapes.AddShape( _
+        msoShapeRoundedRectangle, _
+        target.Left, _
+        target.Top, _
+        target.Width, _
+        target.Height)
+
+    With shp
+        .Name = "btn_" & macroName
+        .Fill.ForeColor.RGB = fillColor
+        .Line.ForeColor.RGB = fillColor
+
+        .TextFrame2.TextRange.Text = caption
+        .TextFrame2.TextRange.Font.Name = "Yu Gothic UI"
+        .TextFrame2.TextRange.Font.Size = 11
+        .TextFrame2.TextRange.Font.Bold = msoTrue
+        .TextFrame2.TextRange.Font.Fill.ForeColor.RGB = vbWhite
+        .TextFrame2.VerticalAnchor = msoAnchorMiddle
+        .TextFrame2.TextRange.ParagraphFormat.Alignment = msoAlignCenter
+
+        .OnAction = "'" & ThisWorkbook.Name & "'!" & macroName
+        .Placement = xlFreeFloating
+    End With
+End Sub
+
+Private Sub LabelAndInput( _
+    ByVal ws As Worksheet, _
+    ByVal labelCell As String, _
+    ByVal labelText As String, _
+    ByVal inputAddress As String, _
+    ByVal mergeInput As Boolean)
+
+    ws.Range(labelCell).Value = labelText
+    ws.Range(labelCell).Interior.Color = RGB(234, 242, 248)
+    ws.Range(labelCell).Font.Bold = True
+
+    If mergeInput Then
+        ws.Range(inputAddress).Merge
+    End If
+
+    With ws.Range(inputAddress)
+        .Interior.Color = vbWhite
+        .Borders.LineStyle = xlContinuous
+        .Borders.Color = RGB(175, 192, 206)
+    End With
+End Sub
+
+Private Sub WriteList( _
+    ByVal ws As Worksheet, _
+    ByVal headerCell As String, _
+    ByVal title As String, _
+    ByVal values As Variant)
+
+    Dim startCell As Range
+    Dim i As Long
+
+    Set startCell = ws.Range(headerCell)
+
+    startCell.Value = title
+    startCell.Interior.Color = RGB(23, 50, 77)
+    startCell.Font.Color = vbWhite
+    startCell.Font.Bold = True
+
+    For i = 0 To UBound(values)
+        startCell.Offset(i + 1, 0).Value = values(i)
+        startCell.Offset(i + 1, 0).Interior.Color = _
+            RGB(234, 242, 248)
+    Next i
+End Sub
+
+Private Sub ApplyValidations()
+    ReplaceName _
+        "TodoCategories", _
+        "='" & S_SETTINGS & "'!$E$4:$E$20"
+
+    ReplaceName _
+        "TodoPriorities", _
+        "='" & S_SETTINGS & "'!$G$4:$G$10"
+
+    ReplaceName _
+        "TodoStatuses", _
+        "='" & S_SETTINGS & "'!$I$4:$I$10"
+
+    ReplaceName _
+        "TodoRepeats", _
+        "='" & S_SETTINGS & "'!$K$4:$K$20"
+
+    ReplaceName _
+        "TodoBases", _
+        "='" & S_SETTINGS & "'!$M$4:$M$10"
+
+    ReplaceName _
+        "TodoWeekdays", _
+        "='" & S_SETTINGS & "'!$O$4:$O$12"
+
+    ReplaceName _
+        "TodoOrdinals", _
+        "='" & S_SETTINGS & "'!$Q$4:$Q$10"
+
+    AddListValidation _
+        ThisWorkbook.Worksheets(S_TODO).Range("B11:B510"), _
+        "TodoPriorities"
+
+    AddListValidation _
+        ThisWorkbook.Worksheets(S_TODO).Range("G11:G510"), _
+        "TodoStatuses"
+
+    AddListValidation _
+        ThisWorkbook.Worksheets(S_TODO).Range("H11:H510"), _
+        "TodoCategories"
+
+    AddListValidation _
+        ThisWorkbook.Worksheets(S_TODO).Range("I11:I510"), _
+        "TodoRepeats"
+
+    AddListValidation _
+        ThisWorkbook.Worksheets(S_ENTRY).Range("F7"), _
+        "TodoPriorities"
+
+    AddListValidation _
+        ThisWorkbook.Worksheets(S_ENTRY).Range("C9"), _
+        "TodoCategories"
+
+    AddListValidation _
+        ThisWorkbook.Worksheets(S_ENTRY).Range("F9"), _
+        "TodoStatuses"
+
+    AddListValidation _
+        ThisWorkbook.Worksheets(S_ENTRY).Range("C15"), _
+        "TodoRepeats"
+
+    AddListValidation _
+        ThisWorkbook.Worksheets(S_ENTRY).Range("C17"), _
+        "TodoBases"
+
+    AddListValidation _
+        ThisWorkbook.Worksheets(S_ENTRY).Range("F17"), _
+        "TodoWeekdays"
+
+    AddListValidation _
+        ThisWorkbook.Worksheets(S_ENTRY).Range("F19"), _
+        "TodoOrdinals"
+End Sub
+
+Private Sub ReplaceName( _
+    ByVal nameText As String, _
+    ByVal refersToText As String)
+
+    On Error Resume Next
+    ThisWorkbook.Names(nameText).Delete
+    On Error GoTo 0
+
+    ThisWorkbook.Names.Add _
+        Name:=nameText, _
+        RefersTo:=refersToText
+End Sub
+
+Private Sub AddListValidation( _
+    ByVal target As Range, _
+    ByVal nameText As String)
+
+    On Error Resume Next
+    target.Validation.Delete
+    On Error GoTo 0
+
+    target.Validation.Add _
+        Type:=xlValidateList, _
+        AlertStyle:=xlValidAlertStop, _
+        Formula1:="=" & nameText
+
+    target.Validation.IgnoreBlank = True
+    target.Validation.InCellDropdown = True
+End Sub
+
+'============================================================
+' テーブル・ID共通処理
+'============================================================
+Private Function TodoTable() As ListObject
+    Set TodoTable = _
+        ThisWorkbook.Worksheets(S_TODO).ListObjects(T_TODO)
+End Function
+
+Private Function HistoryTable() As ListObject
+    Set HistoryTable = _
+        ThisWorkbook.Worksheets(S_HISTORY).ListObjects(T_HISTORY)
+End Function
+
+Private Function WritableRow( _
+    ByVal lo As ListObject) As ListRow
+
+    Dim lr As ListRow
+
+    If lo.ListRows.Count = 0 Then
+        Set WritableRow = lo.ListRows.Add
+        Exit Function
+    End If
+
+    For Each lr In lo.ListRows
+        If Application.WorksheetFunction.CountA(lr.Range) = 0 Then
+            Set WritableRow = lr
+            Exit Function
+        End If
+    Next lr
+
+    Set WritableRow = lo.ListRows.Add
+End Function
+
+Private Sub EnsureBlankRow(ByVal lo As ListObject)
+    If lo.ListRows.Count = 0 Then
+        lo.ListRows.Add
+    End If
+End Sub
+
+Private Function SelectedListRow( _
+    ByVal lo As ListObject) As ListRow
+
+    Set SelectedListRow = ListRowFromCell(lo, ActiveCell)
+End Function
+
+Private Function ListRowFromCell( _
+    ByVal lo As ListObject, _
+    ByVal target As Range) As ListRow
+
+    Dim hit As Range
+    Dim rowIndex As Long
+
+    If lo.DataBodyRange Is Nothing Then Exit Function
+
+    Set hit = Intersect(target, lo.DataBodyRange)
+
+    If hit Is Nothing Then Exit Function
+
+    rowIndex = hit.Row - lo.DataBodyRange.Row + 1
+
+    Set ListRowFromCell = lo.ListRows(rowIndex)
+End Function
+
+Private Function FindTodoById( _
+    ByVal taskId As String) As ListRow
+
+    Dim lr As ListRow
+
+    If taskId = "" Then Exit Function
+
+    For Each lr In TodoTable.ListRows
+        If CStr(lr.Range.Cells(1, C_TASK_ID).Value) = taskId Then
+            Set FindTodoById = lr
+            Exit Function
+        End If
+    Next lr
+End Function
+
+Private Function ExistingSeriesDueId( _
+    ByVal seriesId As String, _
+    ByVal dueDate As Date) As String
+
+    Dim lr As ListRow
+
+    For Each lr In TodoTable.ListRows
+        If CStr(lr.Range.Cells(1, C_SERIES_ID).Value) = _
+           seriesId Then
+
+            If IsDate(lr.Range.Cells(1, C_SELF_DUE).Value) Then
+                If CLng(DateValue( _
+                    lr.Range.Cells(1, C_SELF_DUE).Value)) = _
+                   CLng(dueDate) Then
+
+                    ExistingSeriesDueId = _
+                        CStr(lr.Range.Cells(1, C_TASK_ID).Value)
+
+                    Exit Function
+                End If
+            End If
+        End If
+    Next lr
+End Function
+
+Private Function NewId(ByVal prefix As String) As String
+    mIdSequence = (mIdSequence + 1) Mod 1000
+
+    Randomize Timer + mIdSequence
+
+    NewId = prefix & "-" & _
+        Format$(Now, "yyyymmddhhnnss") & "-" & _
+        Format$(mIdSequence, "000") & _
+        Format$(Int(Rnd() * 1000), "000")
+End Function
+
+Private Function DefaultText( _
+    ByVal value As Variant, _
+    ByVal defaultValue As String) As String
+
+    If Trim$(CStr(value)) = "" Then
+        DefaultText = defaultValue
+    Else
+        DefaultText = CStr(value)
+    End If
+End Function
+
+Private Function ToBoolean(ByVal value As Variant) As Boolean
+    If VarType(value) = vbBoolean Then
+        ToBoolean = CBool(value)
+    ElseIf IsNumeric(value) Then
+        ToBoolean = (CDbl(value) <> 0)
+    Else
+        ToBoolean = _
+            (UCase$(Trim$(CStr(value))) = "TRUE")
+    End If
+End Function
+
+Private Function TargetSheetExists() As Boolean
+    Dim nameValue As Variant
+
+    For Each nameValue In _
+        Array(S_TODO, S_ENTRY, S_HISTORY, S_SETTINGS)
+
+        If SheetExists(CStr(nameValue)) Then
+            TargetSheetExists = True
+            Exit Function
+        End If
+    Next nameValue
+End Function
+
+Private Function SheetExists( _
+    ByVal sheetName As String) As Boolean
+
+    Dim ws As Worksheet
+
+    On Error Resume Next
+    Set ws = ThisWorkbook.Worksheets(sheetName)
+    On Error GoTo 0
+
+    SheetExists = Not ws Is Nothing
+End Function
