@@ -1,0 +1,18 @@
+Option Explicit
+
+Private Sub Workbook_Open()
+    On Error Resume Next
+    InitializeOnOpen
+    On Error GoTo 0
+End Sub
+
+Private Sub Workbook_SheetBeforeDoubleClick( _
+    ByVal Sh As Object, _
+    ByVal Target As Range, _
+    Cancel As Boolean)
+
+    If IsDoneCell(Sh, Target) Then
+        Cancel = True
+        CompleteTaskFromCell Target
+    End If
+End Sub
